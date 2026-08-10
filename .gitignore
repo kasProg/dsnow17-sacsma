@@ -1,0 +1,17 @@
+# Build artifacts
+fortran/*.so
+fortran/*.o
+*.mod
+
+# Extracted from external/snow17/test_cases/ex1.tgz at test time
+external/snow17/test_cases/ex1/
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+
+# OS / editor
+.DS_Store
+.vscode/

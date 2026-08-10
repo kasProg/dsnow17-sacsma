@@ -1,0 +1,3 @@
+[submodule "external/snow17"]
+	path = external/snow17
+	url = https://github.com/NOAA-OWP/snow17.git

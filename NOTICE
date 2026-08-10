@@ -1,0 +1,17 @@
+dsnow17-hbv
+Copyright 2026 Kamlesh Sawadekar
+
+This product includes software adapted from Snow-17 (NOAA Office of
+Water Prediction), licensed under the Apache License, Version 2.0.
+
+    https://github.com/NOAA-OWP/snow17
+
+fortran/snow17_shim.f90 links directly against the unmodified FORTRAN-77
+physics files in external/snow17/src/snow19/ (vendored as a git submodule,
+pinned to a specific commit -- see external/snow17's own commit hash for
+the exact version and its known issues). No changes were made to any
+snow19/ source file; the shim only adds a bind(C) driver loop around
+EXSNOW19.
+
+See https://github.com/NOAA-OWP/snow17/blob/main/LICENSE for the full
+upstream license text.
