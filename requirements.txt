@@ -2,3 +2,5 @@ numpy
 pandas
 pytest
 torch
+tesseract-core[runtime]
+tesseract-torch

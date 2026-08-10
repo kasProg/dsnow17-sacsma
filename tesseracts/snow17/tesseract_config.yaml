@@ -1,0 +1,32 @@
+# Tesseract configuration for the Snow-17 wrapper.
+# See tesseracts/snow17/tesseract_api.py for the endpoint implementations.
+
+name: "snow17"
+version: "0.1.0"
+description: >
+  Differentiable Snow-17 (NOAA-OWP, Apache-2.0) wrapped for Tesseract.
+  apply() runs EXSNOW19 over a daily time series for one HRU via
+  fortran/snow17_shim.f90; vector_jacobian_product() computes gradients
+  w.r.t. the 11 learnable scalar parameters by forward-difference finite
+  differences over full rollouts.
+
+build_config:
+  target_platform: "native"
+
+  # NOT YET CONFIGURED: `tesseract build` needs Docker, which this
+  # development machine's account doesn't have permission to use
+  # (confirmed: `docker ps` -> permission denied, account not in the
+  # `docker` group). apply()/vector_jacobian_product() have been
+  # developed and tested locally via
+  # `tesseract_core.Tesseract.from_tesseract_api()`, which imports the
+  # API module directly and does not require Docker -- see
+  # tests/test_tesseract_api.py. Containerizing for the actual
+  # submission is unresolved; see notes/logs.md. Once unblocked, this
+  # will need:
+  #   extra_packages: [gfortran]
+  #   package_data: [[fortran, fortran], [src, src]]
+  #   custom_build_steps: rebuild libsnow17shim.so from source inside
+  #     the container (do NOT ship the host-built .so -- glibc/arch
+  #     mismatches between build and container base image are exactly
+  #     the kind of silent-wrongness failure this project is trying to
+  #     avoid elsewhere).
