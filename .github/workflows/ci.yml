@@ -1,0 +1,75 @@
+name: CI
+
+# Two jobs: `test` runs the full local test suite (no Docker needed --
+# this is exactly what `make test` does on any dev machine). `tesseract-build`
+# solves the Docker blocker documented in notes/logs.md: this project's
+# development machine can't use Docker (account not in the `docker`
+# group, no passwordless sudo, no subuid/subgid for rootless Docker --
+# see that log entry for the full investigation), but GitHub-hosted
+# runners have Docker preinstalled with no such restriction. Building here
+# is also a genuine reproducibility win (criterion 6), not just a
+# workaround -- an automated, from-scratch container build on every push
+# is stronger evidence of reproducibility than a manual local one.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install gfortran
+        run: sudo apt-get update && sudo apt-get install -y gfortran
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Run test suite
+        run: make test
+
+  tesseract-build:
+    runs-on: ubuntu-latest
+    needs: test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
+      - name: Install tesseract-core
+        run: |
+          uv venv .venv --python 3.11
+          uv pip install --python .venv/bin/python "tesseract-core[runtime]" numpy
+
+      # No --tag: tesseract_config.yaml's `name:` + the default `latest`
+      # tag (per `tesseract build --help`) give snow17:latest / sacsma:latest.
+      - name: Build snow17 Tesseract
+        run: .venv/bin/tesseract build tesseracts/snow17
+
+      - name: Build sacsma Tesseract
+        run: .venv/bin/tesseract build tesseracts/sacsma
+
+      - name: List built images
+        run: docker images
+
+      # Runs apply() against the actual containerized images, not just
+      # confirming `docker build` succeeded -- a build can succeed while
+      # the runtime is still broken (wrong path inside the container,
+      # missing runtime dependency, etc). Skips gracefully (not part of
+      # `make test`) when Docker/the images aren't available, which is
+      # always true on this project's local dev machine.
+      - name: Smoke-test containers
+        run: .venv/bin/python -m pytest tests/test_tesseract_build.py -v

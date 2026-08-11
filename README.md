@@ -23,9 +23,11 @@ the loss from 0.020 to ~0.0003 within a couple of gradient steps
 through both Fortran models and carry real, usable optimization signal.
 Native-PyTorch HBV is **not** the current plan — it's the documented Aug
 20 fallback only, see CLAUDE.md. Not yet built: the parameter-prediction
-network and multi-basin CAMELS training (CLAUDE.md's Day 7-10). `tesseract
-build` (containerizing for submission) is blocked on this development
-machine — see [Reproduce](#reproduce) and [notes/logs.md](notes/logs.md).
+network and multi-basin CAMELS training (CLAUDE.md's Day 7-10).
+`tesseract build` can't run on this development machine (no Docker access
+— see [Reproduce](#reproduce)) but runs in CI on every push, building both
+containers from scratch and smoke-testing `apply()` against the actual
+built images — see [.github/workflows/ci.yml](.github/workflows/ci.yml).
 
 **Found and fixed one real, live upstream bug along the way:** a Fortran
 implicit-`SAVE` state-leakage bug in SAC-SMA's `sac1.f90` (not gated behind
@@ -64,14 +66,20 @@ Tests extract `external/snow17/test_cases/ex1.tgz` on first run to get
 reference forcing/parameters/output for validation — no manual step needed.
 SAC-SMA's ex1 reference (same HHWM8 basin/period) ships unpacked already.
 
-**Docker note:** `tesseract build` (packaging a Tesseract as an OCI
-container, needed for the final submission) requires Docker, which this
-development machine's account doesn't have permission to use. All Tesseract
-development/testing so far runs through
+**Docker note:** this development machine's account can't use Docker (not
+in the `docker` group, no passwordless `sudo`, no `subuid`/`subgid`
+entries for rootless Docker either — see notes/logs.md for the full
+investigation). Day-to-day `apply()`/`vector_jacobian_product()`
+development/testing runs through
 `tesseract_core.Tesseract.from_tesseract_api()`, which imports
 `tesseract_api.py` directly and needs no container — see
-`tests/test_gradients.py`. Containerizing is unresolved; see
-[notes/logs.md](notes/logs.md).
+`tests/test_gradients.py`. Actual containerization (`tesseract build`,
+needed for the real submission artifact) runs in CI instead —
+GitHub-hosted runners have Docker preinstalled — see
+[.github/workflows/ci.yml](.github/workflows/ci.yml) and
+[tests/test_tesseract_build.py](tests/test_tesseract_build.py) (a
+smoke test against the actual built images, skipped locally, run in CI
+after each build).
 
 ## Layout
 

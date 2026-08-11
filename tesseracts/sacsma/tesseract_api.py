@@ -37,6 +37,7 @@ timestep, thousands of runs, which this endpoint would produce correctly
 but far too slowly for that use).
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -45,8 +46,11 @@ from pydantic import BaseModel
 
 from tesseract_core.runtime import Array, Differentiable, Float64, ShapeDType
 
-# tesseracts/sacsma/tesseract_api.py -> tesseracts/sacsma -> tesseracts -> repo root
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+# Local dev: tesseract_api.py -> tesseracts/sacsma -> tesseracts -> repo root
+# (3 parents up). Inside a built container this doesn't hold -- see the
+# matching comment in tesseracts/snow17/tesseract_api.py for why, and
+# TESSERACT_PROJECT_ROOT's role.
+_REPO_ROOT = Path(os.environ.get("TESSERACT_PROJECT_ROOT", str(Path(__file__).resolve().parent.parent.parent)))
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from sacsma import STATE_SIZE, SacSmaParams, run_sacsma  # noqa: E402

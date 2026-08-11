@@ -10,23 +10,36 @@ description: >
   w.r.t. the 11 learnable scalar parameters by forward-difference finite
   differences over full rollouts.
 
+env:
+  # Matches tesseract_api.py's _REPO_ROOT fallback logic -- see the
+  # comment there for why the container's flat /tesseract/tesseract_api.py
+  # layout needs this instead of the local-dev relative-path heuristic.
+  TESSERACT_PROJECT_ROOT: "/tesseract"
+
 build_config:
   target_platform: "native"
 
-  # NOT YET CONFIGURED: `tesseract build` needs Docker, which this
-  # development machine's account doesn't have permission to use
-  # (confirmed: `docker ps` -> permission denied, account not in the
-  # `docker` group). apply()/vector_jacobian_product() have been
-  # developed and tested locally via
-  # `tesseract_core.Tesseract.from_tesseract_api()`, which imports the
-  # API module directly and does not require Docker -- see
-  # tests/test_gradients.py. Containerizing for the actual
-  # submission is unresolved; see notes/logs.md. Once unblocked, this
-  # will need:
-  #   extra_packages: [gfortran]
-  #   package_data: [[fortran, fortran], [src, src]]
-  #   custom_build_steps: rebuild libsnow17shim.so from source inside
-  #     the container (do NOT ship the host-built .so -- glibc/arch
-  #     mismatches between build and container base image are exactly
-  #     the kind of silent-wrongness failure this project is trying to
-  #     avoid elsewhere).
+  # gfortran to compile the shim inside the container -- do NOT ship a
+  # host-built .so instead (glibc/arch mismatches between this dev
+  # machine and the container base image are exactly the kind of
+  # silent-wrongness failure this project is built to avoid elsewhere).
+  extra_packages:
+    - gfortran
+
+  # Source paths are relative to this directory (tesseracts/snow17/);
+  # tesseract_core resolves out-of-tree paths and stages them
+  # automatically (confirmed by reading tesseract_core.sdk.engine's
+  # prepare_build_context -- see notes/logs.md). Only the snow19/
+  # physics subdir is copied, not the whole submodule (docs, CMake
+  # files, etc. the container doesn't need).
+  package_data:
+    - [../../fortran, /tesseract/fortran]
+    - [../../external/snow17/src/snow19, /tesseract/external/snow17/src/snow19]
+    - [../../src, /tesseract/src]
+
+  # Runs as root, after extra_packages install, before the container
+  # drops to a non-root user (confirmed from Dockerfile.base's template
+  # ordering) -- same build script local dev uses via `make build`, so
+  # there is exactly one place that knows how to build this shim.
+  custom_build_steps:
+    - "RUN /tesseract/fortran/build.sh"

@@ -24,6 +24,7 @@ finite-differencing per-timestep would be both wrong (state carries
 across timesteps within a rollout) and far too fine-grained.
 """
 
+import os
 import sys
 from pathlib import Path
 
@@ -32,8 +33,15 @@ from pydantic import BaseModel
 
 from tesseract_core.runtime import Array, Differentiable, Float32, Int32, ShapeDType
 
-# tesseracts/snow17/tesseract_api.py -> tesseracts/snow17 -> tesseracts -> repo root
-_REPO_ROOT = Path(__file__).resolve().parent.parent.parent
+# Local dev: tesseract_api.py -> tesseracts/snow17 -> tesseracts -> repo root
+# (3 parents up). Inside a built container, tesseract_api.py instead lands
+# flat at /tesseract/tesseract_api.py (see Dockerfile.base -- COPY places
+# it directly at that path, not nested), so the 3-parents-up relationship
+# doesn't hold there. tesseract_config.yaml's build_config sets
+# TESSERACT_PROJECT_ROOT=/tesseract via `env:` for that case, with
+# package_data laying out src/ and fortran/ under it to match. Falls back
+# to the local-dev relative path when the env var isn't set.
+_REPO_ROOT = Path(os.environ.get("TESSERACT_PROJECT_ROOT", str(Path(__file__).resolve().parent.parent.parent)))
 sys.path.insert(0, str(_REPO_ROOT / "src"))
 
 from snow17 import CS_SIZE, Snow17Params, run_snow17  # noqa: E402

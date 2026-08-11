@@ -834,3 +834,84 @@ guess and dropped to `~0.0003` (NSE `0.9997`) within the first couple of
 gradient steps on a real HHWM8 water year -- strong evidence the
 gradients carry real, usable optimization information end to end through
 both Fortran models, not just that they're finite and non-zero.
+
+---
+
+## 2026-08-11 — `tesseract build`: solved via CI, not local Docker access
+
+**What:** investigated fixing Docker access on this dev machine directly
+before deciding against it. `docker ps` -> permission denied (confirmed
+earlier); this session additionally checked: no passwordless `sudo`
+(`sudo -n true` fails); `podman` not installed; `dockerd-rootless-setuptool.sh`
+*is* present (rootless Docker is installed) but needs `/etc/subuid` and
+`/etc/subgid` entries for this account, which don't exist and require
+root to add; the `docker` group itself appears AD-managed
+(`docker:...:tkb5476,cxs1024,kel33@AD.PSU.EDU,lgl5139` -- all
+`@AD.PSU.EDU` accounts), so even a one-off `sudo usermod -aG docker` (if
+sudo were available) might not persist through the next AD sync. Every
+path that fixes this *on this machine* needs an admin ticket. Asked the
+user to choose between that, a generate-only-then-build-elsewhere
+workaround, or CI; user picked CI.
+
+**Why CI over the other two options:** GitHub-hosted runners have Docker
+preinstalled with no group-membership restriction -- fixes the blocker
+immediately, no ticket, no waiting. It's also strictly better than the
+generate-only workaround for this project's actual goal: an automated,
+reproducible, from-scratch container build triggered by every push is
+stronger evidence for judging criterion 6 ("reproducibility and
+communication") than "here's a Dockerfile, go build it yourself
+somewhere," which would've been the generate-only path's end state
+regardless of where the manual build eventually happened.
+
+**Why this needed real code changes first, not just a CI YAML file:**
+tried to get `tesseract_config.yaml`'s `build_config` right on the first
+attempt rather than guess-and-iterate through several slow CI round
+trips, by reading `tesseract_core.sdk.engine.py`'s
+`prepare_build_context` and the `Dockerfile.base` Jinja template
+directly instead of assuming. Two real findings from that reading, not
+from a failed build:
+
+1. **`tesseract_api.py` lands flat at `/tesseract/tesseract_api.py`
+   inside the container** -- not nested 3 directories deep the way
+   `tesseracts/snow17/tesseract_api.py` sits locally. Both wrappers'
+   `_REPO_ROOT = Path(__file__).resolve().parent.parent.parent` would
+   have resolved to the filesystem root inside a real container --
+   never caught locally, since `Tesseract.from_tesseract_api()` (all
+   local dev/testing) imports the file from its real, nested-3-deep
+   location and the relative-path logic is correct there. Fixed by
+   reading a `TESSERACT_PROJECT_ROOT` env var first, falling back to the
+   local-dev relative-path computation when unset -- `env:
+   TESSERACT_PROJECT_ROOT: "/tesseract"` in both `tesseract_config.yaml`s
+   supplies it in-container; nothing changes for local dev, where the
+   env var is simply absent.
+2. **`package_data`/`custom_build_steps` run as root, after
+   `extra_packages` are installed, before the container drops to a
+   non-root user** (confirmed from `Dockerfile.base`'s literal
+   instruction ordering) -- meaning the exact same build scripts local
+   dev already uses (`fortran/build.sh`, `fortran/sacsma_build.sh`) can
+   run unmodified inside the container via `custom_build_steps`, with
+   `gfortran`/`patch` available via `extra_packages`. Deliberately did
+   NOT ship a host-built `.so` into the image -- same glibc/arch-mismatch
+   reasoning already documented for why the shims get built from source
+   in the first place, just now applying to "host machine" vs.
+   "container base image" instead of "dev machine" vs. "whatever runs
+   the tests."
+
+Also confirmed `package_data` source paths can point outside the
+Tesseract's own directory (`../../fortran`, `../../external/snow17/src/snow19`,
+etc., relative to `tesseracts/snow17/`) -- `prepare_build_context` stages
+anything outside `src_dir` into a sibling `__package_data__` directory and
+rewrites the path automatically, so there was no need to restructure the
+repo or duplicate files into each tesseract's own directory. Scoped each
+`package_data` entry to exactly what each shim's build script needs
+(`external/snow17/src/snow19`, not the whole submodule; `external/sac-sma/src/sac`
++ `patches/`, not the whole sac-sma submodule) rather than copying entire
+submodules into the image.
+
+**What's still unverified:** none of this has been exercised against a
+real Docker daemon yet -- this dev machine still can't run one. The
+actual proof is the first CI run after this commit; `tests/test_tesseract_build.py`
+(skips locally, runs in CI) calls real `apply()` against the built images
+specifically so a successful `docker build` isn't mistaken for a working
+container -- a build can succeed while runtime path resolution or a
+missing dependency still breaks the actual endpoint.

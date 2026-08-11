@@ -15,16 +15,34 @@ description: >
   see notes/NOTES.md's "why we bypass tesseract-torch's automatic
   composition" writeup.
 
+env:
+  # See tesseracts/snow17/tesseract_config.yaml's identical setting and
+  # tesseract_api.py's _REPO_ROOT comment for why.
+  TESSERACT_PROJECT_ROOT: "/tesseract"
+
 build_config:
   target_platform: "native"
 
-  # NOT YET CONFIGURED: same Docker blocker as tesseracts/snow17/ -- see
-  # that config's comment and notes/logs.md. Developed/tested locally via
-  # tesseract_core.Tesseract.from_tesseract_api(), no container needed --
-  # see tests/test_gradients.py. Once unblocked, this will need:
-  #   extra_packages: [gfortran, patch]
-  #   package_data: [[fortran, fortran], [src, src], [patches, patches]]
-  #   custom_build_steps: run fortran/sacsma_build.sh inside the
-  #     container (stages + patches + compiles from source) -- do NOT
-  #     ship the host-built .so, same glibc/arch-mismatch reasoning as
-  #     the snow17 config.
+  # gfortran to compile the shim inside the container; patch to apply
+  # patches/sac1_bypass_ratio_check_save_fix.patch at build time, exactly
+  # like fortran/sacsma_build.sh does locally -- same reasoning as
+  # snow17's config for why this isn't a shipped host-built .so.
+  extra_packages:
+    - gfortran
+    - patch
+
+  # Only the sac/ physics subdir is copied, not the whole sac-sma
+  # submodule. patches/ ships the disclosed, minimal build-time patch --
+  # see notes/NOTES.md for what it fixes and why external/sac-sma itself
+  # is never modified.
+  package_data:
+    - [../../fortran, /tesseract/fortran]
+    - [../../external/sac-sma/src/sac, /tesseract/external/sac-sma/src/sac]
+    - [../../patches, /tesseract/patches]
+    - [../../src, /tesseract/src]
+
+  # Same build script `make build` uses locally -- stages a copy of
+  # sac1.f90, applies the patch, compiles. One place that knows how to
+  # build this shim, not a container-specific reimplementation of it.
+  custom_build_steps:
+    - "RUN /tesseract/fortran/sacsma_build.sh"
