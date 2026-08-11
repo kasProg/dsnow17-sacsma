@@ -15,19 +15,32 @@ end-to-end, including through real `torch` graphs via `tesseract-torch`'s
 (`src/coupling.py`, "option 1.5" in CLAUDE.md) is built, validated against
 autograd ground truth + an independent brute-force check on cheap
 stand-ins first (`tests/test_coupling_toy.py`), then wired to the real
-Tesseracts (`src/pipeline.py`). **CLAUDE.md's Day 5-6 checkpoint is
-met:** chaining Snow17 -> SAC-SMA -> an NSE-style loss -> `.backward()`
+Tesseracts (`src/pipeline.py`). `tesseract build` can't run on this
+development machine (no Docker access — see [Reproduce](#reproduce)) but
+runs in CI on every push, building both containers from scratch and
+smoke-testing `apply()` against the actual built images — see
+[.github/workflows/ci.yml](.github/workflows/ci.yml).
+
+**CLAUDE.md's Day 5-10 checkpoints are both met.** Day 5-6 (single
+basin): chaining Snow17 -> SAC-SMA -> an NSE-style loss -> `.backward()`
 on real HHWM8 data and optimizing from a perturbed initial guess drives
 the loss from 0.020 to ~0.0003 within a couple of gradient steps
-(`tests/test_pipeline_hhwm8.py`) — gradients are flowing end to end
-through both Fortran models and carry real, usable optimization signal.
+(`tests/test_pipeline_hhwm8.py`). Day 7-10 (parameter network,
+multi-basin, held-out): `src/paramnet.py` (an MLP -- CLAUDE.md's own
+plan left "LSTM/MLP" undecided; MLP is architecturally correct given the
+input is static per-basin attributes, no sequence for an LSTM to be
+recurrent over) predicts all 27 learnable parameters from 39 CAMELS
+static attributes, trained end-to-end (`src/train.py`) across 35
+snow-dominated CAMELS basins with 10 held out. Real result: train NSE
+`-1.62 -> +0.50`, held-out NSE `-0.46 -> +0.54` over 25 epochs — held-out
+basins tracked training basins closely throughout, no overfitting
+observed at this scale. See [notes/logs.md](notes/logs.md) for the full
+data pipeline (basin selection, the Hamon PET derivation CAMELS' daily
+forcing doesn't provide directly, training-window coverage verification)
+and the result in context.
+
 Native-PyTorch HBV is **not** the current plan — it's the documented Aug
-20 fallback only, see CLAUDE.md. Not yet built: the parameter-prediction
-network and multi-basin CAMELS training (CLAUDE.md's Day 7-10).
-`tesseract build` can't run on this development machine (no Docker access
-— see [Reproduce](#reproduce)) but runs in CI on every push, building both
-containers from scratch and smoke-testing `apply()` against the actual
-built images — see [.github/workflows/ci.yml](.github/workflows/ci.yml).
+20 fallback only, see CLAUDE.md.
 
 **Found and fixed one real, live upstream bug along the way:** a Fortran
 implicit-`SAVE` state-leakage bug in SAC-SMA's `sac1.f90` (not gated behind
@@ -66,6 +79,20 @@ Tests extract `external/snow17/test_cases/ex1.tgz` on first run to get
 reference forcing/parameters/output for validation — no manual step needed.
 SAC-SMA's ex1 reference (same HHWM8 basin/period) ships unpacked already.
 
+**CAMELS data (multi-basin training):** not fetched by `make test` —
+it's a separate, ~3.4GB one-time download, deliberately kept out of the
+fast local test loop.
+
+```bash
+data/download_camels.sh          # downloads attribute files + forcing/streamflow archive
+.venv/bin/python data/select_basins.py     # -> data/camels/selected_basins.csv
+.venv/bin/python data/build_attributes.py  # -> data/camels/basin_attributes.npz
+.venv/bin/python src/train.py              # trains, prints per-epoch train/held-out NSE
+```
+
+`tests/test_train.py` skips gracefully (like the Docker container test
+below) when this data isn't present.
+
 **Docker note:** this development machine's account can't use Docker (not
 in the `docker` group, no passwordless `sudo`, no `subuid`/`subgid`
 entries for rootless Docker either — see notes/logs.md for the full
@@ -93,7 +120,13 @@ fortran/sacsma_build.sh           stages + patches a build-time copy of sac1.f90
 src/snow17.py                     ctypes wrapper around the snow17 shim (float32)
 src/sacsma.py                     ctypes wrapper around the sacsma shim (float64)
 src/coupling.py                   cross-model gradient orchestration (option 1.5, see CLAUDE.md)
-src/pipeline.py                   wires the real Tesseracts into coupling.py for one HRU
+src/pipeline.py                   wires the real Tesseracts into coupling.py, reused across basins
+src/paramnet.py                   MLP: 39 CAMELS static attributes -> 27 bounded Snow17/SAC-SMA parameters
+src/train.py                      multi-basin training loop + held-out evaluation
+data/download_camels.sh           one-time ~3.4GB CAMELS download (not run by make test)
+data/select_basins.py             picks snow-dominated basins by frac_snow, train/heldout split
+data/build_attributes.py          builds the 39-feature normalized static attribute matrix
+data/camels_loader.py             per-basin forcing/streamflow loader + Hamon PET derivation
 tesseracts/snow17/                 Tesseract wrapper: apply() + finite-difference vector_jacobian_product()
 tesseracts/sacsma/                 same, for SAC-SMA
 tests/test_snow17_shim.py          determinism, state continuity, mass balance + reference cross-checks
@@ -101,13 +134,11 @@ tests/test_sacsma_shim.py          same, for the SAC-SMA shim, + a dedicated imp
 tests/test_gradients.py            VJP vs. manual perturbation + torch autograd integration, per Tesseract
 tests/test_coupling_toy.py         validates the coupling mechanism against cheap stand-ins first
 tests/test_pipeline_hhwm8.py       real HHWM8 chain: Snow17 -> SAC-SMA -> NSE -> backward, loss decreases
+tests/test_paramnet.py             ParamNet output shapes/dtypes/bounds/gradient-flow
+tests/test_train.py                multi-basin training loop regression check (skips w/o CAMELS data)
 notes/NOTES.md                     upstream findings (TPREV, SCF, ADC, bypass_ratio_check, ...) -- writeup material
 notes/logs.md                      rationale log for our own code/design decisions, kept live
 ```
-
-Not yet built: the parameter-prediction network (`src/paramnet.py`) and
-multi-basin CAMELS training (`src/train.py`); see CLAUDE.md's timeline
-(Day 7-10) for sequencing.
 
 ## License
 

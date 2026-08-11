@@ -75,12 +75,12 @@ def hhwm8_setup():
         state0=np.zeros(6, dtype=np.float64),
     )
 
-    stack = CoupledNWSStack(snow17_forcing, sacsma_forcing)
+    stack = CoupledNWSStack()
 
     theta_A_true = _theta_vector(snow_params, SNOW17_PARAMS)
     theta_B_true = _theta_vector(sac_params, SACSMA_PARAMS)
 
-    return stack, theta_A_true, theta_B_true
+    return stack, snow17_forcing, sacsma_forcing, theta_A_true, theta_B_true
 
 
 def test_loss_decreases_with_synthetic_target_recovery(hhwm8_setup):
@@ -88,12 +88,12 @@ def test_loss_decreases_with_synthetic_target_recovery(hhwm8_setup):
     Fortran models via CoupledNWSStack let an optimizer reduce a
     streamflow loss over a real HHWM8 water year, starting from a
     perturbed initial guess."""
-    stack, theta_A_true, theta_B_true = hhwm8_setup
+    stack, snow17_forcing, sacsma_forcing, theta_A_true, theta_B_true = hhwm8_setup
 
     with torch.no_grad():
         theta_A_ref = torch.tensor(theta_A_true, dtype=torch.float32)
         theta_B_ref = torch.tensor(theta_B_true, dtype=torch.float64)
-        observed = stack.run(theta_A_ref, theta_B_ref).clone()
+        observed = stack.run(theta_A_ref, theta_B_ref, snow17_forcing, sacsma_forcing).clone()
     assert torch.all(torch.isfinite(observed)) and float(observed.sum()) > 0.0
 
     # Perturbed initial guess: 15% off truth, multiplicative (keeps sign
@@ -128,7 +128,7 @@ def test_loss_decreases_with_synthetic_target_recovery(hhwm8_setup):
         optimizer.zero_grad()
         theta_A = z_A * scale_A
         theta_B = z_B * scale_B
-        sim = stack.run(theta_A, theta_B)
+        sim = stack.run(theta_A, theta_B, snow17_forcing, sacsma_forcing)
         denom = torch.sum((observed - observed.mean()) ** 2)
         nse = 1.0 - torch.sum((observed - sim) ** 2) / denom
         loss = 1.0 - nse

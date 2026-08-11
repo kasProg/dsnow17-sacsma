@@ -72,22 +72,24 @@ class SacSmaForcing:
 
 
 class CoupledNWSStack:
-    """Loads both Tesseracts once (local, no Docker -- see
-    notes/logs.md); `.run(theta_A, theta_B)` chains them via
-    CoupledTwoStageFunction for the forcing fixed at construction.
+    """Loads both Tesseracts ONCE (local, no Docker -- see notes/logs.md).
+    `.run(theta_A, theta_B, snow17_forcing, sacsma_forcing)` takes forcing
+    per call, not per instance -- so one CoupledNWSStack is reused across
+    every basin in multi-basin training instead of reloading the
+    Tesseract clients (an expensive, basin-independent step) 35+ times
+    per epoch. Originally forcing was fixed at construction (fine for
+    the single-basin proof in tests/test_pipeline_hhwm8.py); refactored
+    once multi-basin training made that assumption wrong -- see
+    notes/logs.md.
     """
 
     def __init__(
         self,
-        snow17_forcing: Snow17Forcing,
-        sacsma_forcing: SacSmaForcing,
         fd_a: FDConfig | None = None,
         fd_b: FDConfig | None = None,
     ) -> None:
         self._snow17 = Tesseract.from_tesseract_api(str(SNOW17_TESSERACT_DIR / "tesseract_api.py"))
         self._sacsma = Tesseract.from_tesseract_api(str(SACSMA_TESSERACT_DIR / "tesseract_api.py"))
-        self._snow17_forcing = snow17_forcing
-        self._sacsma_forcing = sacsma_forcing
         self.fd_a = fd_a or FDConfig(rel=1e-3, floor=1e-4, central=True)
         self.fd_b = fd_b or FDConfig(rel=1e-3, floor=1e-4, central=True)
 
@@ -104,25 +106,38 @@ class CoupledNWSStack:
         out = self._snow17.apply(inputs)
         return np.asarray(out["raim"], dtype=np.float64)
 
-    def _stage_sacsma(self, theta_b_np: np.ndarray, raim: np.ndarray) -> np.ndarray:
-        f = self._sacsma_forcing
-        inputs = dict(
-            dtm=f.dtm, pcp=np.asarray(raim, dtype=np.float64),
-            tmp=f.tmp.astype(np.float64), etp=f.etp.astype(np.float64),
-            state0=f.state0.astype(np.float64),
-        )
-        for name, value in zip(SACSMA_PARAMS, theta_b_np):
-            inputs[name] = float(value)
-        out = self._sacsma.apply(inputs)
-        return np.asarray(out["q"], dtype=np.float64)
+    def _make_stage_sacsma(self, sacsma_forcing: SacSmaForcing):
+        """A fresh closure per .run() call, capturing THAT call's
+        forcing -- not instance state -- so concurrent/interleaved calls
+        for different basins can never cross-contaminate each other."""
 
-    def run(self, theta_A: torch.Tensor, theta_B: torch.Tensor) -> torch.Tensor:
+        def stage_sacsma(theta_b_np: np.ndarray, raim: np.ndarray) -> np.ndarray:
+            f = sacsma_forcing
+            inputs = dict(
+                dtm=f.dtm, pcp=np.asarray(raim, dtype=np.float64),
+                tmp=f.tmp.astype(np.float64), etp=f.etp.astype(np.float64),
+                state0=f.state0.astype(np.float64),
+            )
+            for name, value in zip(SACSMA_PARAMS, theta_b_np):
+                inputs[name] = float(value)
+            out = self._sacsma.apply(inputs)
+            return np.asarray(out["q"], dtype=np.float64)
+
+        return stage_sacsma
+
+    def run(
+        self,
+        theta_A: torch.Tensor,
+        theta_B: torch.Tensor,
+        snow17_forcing: Snow17Forcing,
+        sacsma_forcing: SacSmaForcing,
+    ) -> torch.Tensor:
         """theta_A: 11 Snow17 params, in SNOW17_PARAMS order.
         theta_B: 16 SAC-SMA params, in SACSMA_PARAMS order.
         Returns: runoff (TCI), float64 torch.Tensor, differentiable
         w.r.t. both theta_A and theta_B."""
         return CoupledTwoStageFunction.apply(
-            theta_A, theta_B, self._snow17_forcing,
-            self._stage_snow17, self._stage_sacsma,
+            theta_A, theta_B, snow17_forcing,
+            self._stage_snow17, self._make_stage_sacsma(sacsma_forcing),
             self.fd_a, self.fd_b,
         )

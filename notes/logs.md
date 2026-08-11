@@ -915,3 +915,137 @@ actual proof is the first CI run after this commit; `tests/test_tesseract_build.
 specifically so a successful `docker build` isn't mistaken for a working
 container -- a build can succeed while runtime path resolution or a
 missing dependency still breaks the actual endpoint.
+
+---
+
+## 2026-08-11 — Multi-basin training: CAMELS data, ParamNet, train.py
+
+**What:** CLAUDE.md's Day 7-10 milestone -- a parameter network trained
+across many snow-dominated CAMELS basins with held-out evaluation. Real
+result: 35 training basins, 10 held-out, 25 epochs, train NSE
+`-1.62 -> +0.50`, held-out NSE `-0.46 -> +0.54`. Held-out tracked training
+closely throughout, no overfitting observed at this scale.
+
+**Where the data comes from and why the full archive, not per-basin
+downloads:** CAMELS v2.0, via its DOI (`10.5065/D6MW2F4D`) which
+redirects to a Zenodo mirror
+(`https://zenodo.org/records/15529996`) -- the original UCAR/RAL page
+doesn't expose direct file links, had to follow the DOI to find them.
+`basin_timeseries_v1p2_metForcing_obsFlow.zip` (3.4GB) is the only way
+to get forcing + observed streamflow -- there's no per-basin download
+option, so the full archive is downloaded once and only ~45 basins'
+worth is ever used (`data/download_camels.sh`, not run by `make test` --
+deliberately separate from the fast local loop). The small attribute
+text files (`camels_clim/topo/soil/vege/geol.txt`, all under 130KB) are
+downloaded separately and give the 39 static features `src/paramnet.py`
+takes as input.
+
+**Why `frac_snow` (from `camels_clim.txt`) for basin selection, not a
+new metric:** it's the CAMELS authors' own climatology summary --
+fraction of precipitation falling as snow -- not something derived here.
+`data/select_basins.py` takes the top 45 by `frac_snow` (all `>0.6`,
+range 0.6-0.91), filtered to a minimum 20 sq km area first to avoid
+tiny/flashy headwater catchments that would be numerically finicky for
+reasons unrelated to what's actually being tested here, split 35
+train / 10 held-out with a fixed seed. Geographically diverse in
+practice (CO/WY Rockies, WA Cascades, CA Sierra, ID, NV, UT, MT) without
+that being an explicit selection criterion -- it falls out of picking
+real high-frac_snow US basins.
+
+**Why PET had to be derived, not used directly from CAMELS:** checked
+the actual Daymet forcing file columns directly (`dayl(s) prcp(mm/day)
+srad(W/m2) swe(mm) tmax(C) tmin(C) vp(Pa)`) -- no PET column. CLAUDE.md's
+own plan says "CAMELS provides daily PET estimates," which doesn't hold
+for the actual daily timeseries (only a basin-level *mean* PET exists in
+`camels_clim.txt`, presumably the original paper's own annual-aggregate
+estimate -- not usable as daily forcing). Derived via Hamon (1963),
+sourced from USACE's HEC-HMS technical reference (an authoritative,
+unambiguous source for the exact constants -- several algebraically
+equivalent-looking variants with different surface constants circulate
+in the literature, easy to get subtly wrong by mixing conventions from
+two sources): `PET = 0.1651 * (N/12) * P_t`, `P_t = 216.7 * e_s / (T +
+273.3)`, `e_s = 6.108 * exp(17.27*T / (T + 237.3))`. `N` (day length,
+hours) comes directly from Daymet's own `dayl(s)` column -- no separate
+latitude-based day-length calculation needed, Daymet already computed it
+from the basin's actual location. Sanity-checked before trusting it:
+T=20degC, N=12hr gives PET~=2.85 mm/day, in the expected range for a
+temperate summer day.
+
+**Why the training window is a fixed WY1991-1993 (3 years), not each
+basin's full ~35-year record:** checked actual data coverage across all
+45 basins before picking a window, rather than assuming CAMELS' nominal
+1980-2014 span holds uniformly. Found 6 of 45 basins fail a WY1981-1983
+window (missing entirely or >30% NaN streamflow) and 5 still fail
+WY1986-1988 -- some gauges' usable records start later than CAMELS'
+nominal coverage. WY1991-1993 is the first window with zero basins
+failing (<1095 days or >5% missing). Kept the window short (3 years, not
+the full record) specifically for training-loop cost: at the coupled
+pipeline's measured cost (~0.15-0.2s/basin/epoch for a 3-year series),
+35 basins/epoch stays around 5s/epoch -- a full 25-epoch, 45-basin run
+finished in about 2 minutes. A full 35-year window per basin would have
+made even a modest epoch count impractically slow for this stage, for
+no benefit to what's actually being tested here (whether the network
+learns useful basin-to-parameter mappings at all).
+
+**Why `pipeline.py`'s `CoupledNWSStack` needed refactoring before any of
+this:** it originally took `snow17_forcing`/`sacsma_forcing` at
+construction time (fine for the single-basin proof in
+`tests/test_pipeline_hhwm8.py`, where there's only ever one basin).
+Multi-basin training reuses ONE `CoupledNWSStack` across 35+ basins per
+epoch -- constructing a new instance per basin would reload both
+Tesseract clients (`Tesseract.from_tesseract_api()`, a basin-independent,
+non-trivial-cost step) 35+ times per epoch for no reason. Refactored so
+`.__init__()` only loads the Tesseract clients, and `.run()` takes
+forcing per call. SAC-SMA's forcing specifically is captured via a fresh
+closure built inside each `.run()` call (`_make_stage_sacsma`), not an
+instance attribute -- keeps different basins' calls from being able to
+cross-contaminate each other's forcing even under interleaving, without
+needing to widen `CoupledTwoStageFunction`'s already-tested signature
+for a second `forcings` slot (that Function's single `forcings` argument
+is deliberately for `stage_a` only -- see the original design entry
+above).
+
+**Why `ParamNet`'s output is a bounded sigmoid per parameter, not raw
+network output passed through:** direct empirical precedent, not
+caution in the abstract -- `tests/test_pipeline_hhwm8.py` already showed
+what unconstrained direct optimization does to parameters spanning
+wildly different scales (`SI~1500` next to `MBASE~0`): one bad step,
+NaN. A trained network's raw output has no reason to respect physical
+ranges any better than that manual optimizer did. Bounding at the
+network's own last layer makes it structural -- true for every training
+step, automatically, rather than depending on a carefully-tuned learning
+rate holding for the entire run. Parameter bounds themselves: Snow17
+from the state-contract notes plus real calibrated HHWM8 values seen
+throughout this project, widened to plausible operational ranges; SAC-SMA
+from standard NWS/SCE-UA calibration bounds in the literature (Duan,
+Sorooshian & Gupta 1992) -- not tuned for this project specifically, a
+reasonable-effort default given hackathon scope.
+
+**Why full-batch gradient descent over basins (one `.backward()` per
+epoch, across all 35 training basins at once), not per-basin SGD:**
+`ParamNet`'s forward pass is batched (all 35 basins' attributes through
+the MLP in one call, cheap), but each basin's `CoupledTwoStageFunction`
+call is inherently per-basin (Snow17/SAC-SMA are single-HRU) and
+expensive (real Fortran calls via Tesseract). Averaging all 35 basins'
+losses into one scalar before a single `.backward()` means each
+optimizer step reflects the whole training set's gradient, not one
+basin's noisy individual estimate of it -- standard full-batch practice,
+and it lets PyTorch's autograd handle the "backward through 35 separate
+custom-Function nodes plus the shared MLP" graph in one pass rather than
+35 separate ones with their own bookkeeping.
+
+**On the actual result:** train NSE went negative-to-positive
+(`-1.62 -> +0.50`) and held-out basins tracked training NSE closely the
+entire run (`-0.46 -> +0.54`, ending slightly ABOVE training NSE, though
+with only 10 held-out basins that's within plausible sampling noise, not
+read as "generalizes better than train"). NSE ~0.5 from an MLP that
+never sees a hydrograph directly -- only static basin attributes -- after
+25 epochs, producing parameters for two chained legacy Fortran models
+trained via finite-difference cross-container gradients, is a genuine
+result: it's the actual proof this project's whole architecture works at
+the scale CLAUDE.md's plan calls for, not just on the one hand-tuned
+HHWM8 basin from the Day 5-6 checkpoint. Not polished/tuned (25 epochs,
+default Adam lr, no learning-rate schedule, no regularization sweep) --
+that's legitimate further work (CLAUDE.md's Day 11-14 is figures/writeup,
+not more model development, so this may be close to final scope), not a
+claim that this is a finished, optimized result.
