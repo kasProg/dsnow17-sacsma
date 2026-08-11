@@ -20,7 +20,7 @@ build_config:
   # developed and tested locally via
   # `tesseract_core.Tesseract.from_tesseract_api()`, which imports the
   # API module directly and does not require Docker -- see
-  # tests/test_tesseract_api.py. Containerizing for the actual
+  # tests/test_gradients.py. Containerizing for the actual
   # submission is unresolved; see notes/logs.md. Once unblocked, this
   # will need:
   #   extra_packages: [gfortran]

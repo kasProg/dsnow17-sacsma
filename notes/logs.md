@@ -710,3 +710,127 @@ float32 and SAC-SMA float64 (see the snow17.py vs sacsma.py dtype notes
 above), so `coupling.py`'s dtype handling at that boundary needs
 explicit attention once `tesseracts/sacsma/` exists and both wrappers
 get plugged in as the real `stage_a`/`stage_b`.
+
+---
+
+## 2026-08-11 — `tesseracts/sacsma/tesseract_api.py`
+
+**What:** SAC-SMA's Tesseract wrapper, mirroring
+`tesseracts/snow17/tesseract_api.py`'s structure closely -- `apply()`,
+forward-difference `vector_jacobian_product()`, `abstract_eval()`. All
+16 named parameters are differentiable (unlike Snow17, there's no extra
+curve parameter to exclude -- CLAUDE.md's named list and the real ex1
+parameter file agree exactly on 16, no ambiguity to resolve this time).
+Tests added to `tests/test_gradients.py` (not a new file) -- same file,
+new section, since the README already describes it as covering
+"VJP vs. manual perturbation + torch autograd integration, per Tesseract"
+(plural), and duplicating the whole apply/abstract_eval/VJP/linearity/
+backward test structure into a second file would just be the same tests
+with `Snow17Params` swapped for `SacSmaParams`.
+
+**Why this wrapper's `vector_jacobian_product` is a genuinely separate
+mechanism from `src/coupling.py`'s internal FD sweep, not a redundant
+one:** this endpoint exists so the SAC-SMA Tesseract is independently
+testable and reusable on its own -- consistent with the "a standalone
+Tesseract works with any downstream model" reusability argument for
+having two Tesseracts at all (CLAUDE.md's "why two Tesseracts" section).
+The actual coupled training path in this project never calls it --
+`src/coupling.py` calls `apply()` directly. Worth stating explicitly in
+the module docstring (and here) so nobody reading both files later
+assumes they're duplicated logic that should be unified; they solve
+different problems (standalone SAC-SMA differentiability vs. the
+cross-container coupling that specifically avoids needing SAC-SMA's own
+VJP w.r.t. RAIM).
+
+---
+
+## 2026-08-11 — Real dtype bug caught by wiring in the real Tesseracts
+
+**What:** `src/coupling.py`'s `forward()`/`backward()` originally stored
+one `ctx.out_dtype = theta_A.dtype` and used it for the output tensor
+*and both* gradients. Fixed to track `theta_A`'s and `theta_B`'s
+dtype/device independently, and to return the output tensor in a fixed
+`float64` (matching SAC-SMA's true precision) rather than borrowing
+theta_A's dtype.
+
+**Why `tests/test_coupling_toy.py` never caught this:** every toy test
+used `float64` for both `theta_A` and `theta_B` -- convenient for the
+ground-truth autograd comparison, but it meant `theta_A.dtype ==
+theta_B.dtype` was true in every single toy test, so using theta_A's
+dtype for theta_B's gradient was silently correct by coincidence. The
+real integration has Snow17 at float32 and SAC-SMA at float64 (see
+notes/NOTES.md), which is precisely the case that distinguishes "uses
+each leaf's own dtype" from "uses theta_A's dtype for everything." This
+is exactly the kind of gap toy validation can leave -- caught only once
+`src/pipeline.py` wired in the real, dtype-heterogeneous Tesseracts, not
+by the toy suite itself. Added
+`test_mixed_dtype_thetas_get_matching_gradient_dtypes` to
+`tests/test_coupling_toy.py` (mixed float32/float64 thetas, asserts each
+gradient comes back in its own leaf's dtype) so this stays a cheap,
+fast regression check rather than something only the slow real pipeline
+would catch going forward.
+
+---
+
+## 2026-08-11 — `src/pipeline.py` + `tests/test_pipeline_hhwm8.py`:
+## the real chain, and CLAUDE.md's "loss goes down" checkpoint
+
+**What:** `CoupledNWSStack` wires both real Tesseracts as
+`CoupledTwoStageFunction`'s `stage_a`/`stage_b`, for a single HRU's fixed
+forcing. `tests/test_pipeline_hhwm8.py` runs it on real HHWM8 data (same
+basin/period both vendored `ex1` test cases ship) and shows a loss
+decreasing under gradient-based optimization -- CLAUDE.md's Day 5-6
+"Loss goes down = submittable" checkpoint.
+
+**Why SAC-SMA's own forcing (`tmp`, `etp`, `dtm`, `state0`) is closed
+over rather than threaded through `CoupledTwoStageFunction`'s
+signature:** that `Function` only has one `forcings` slot, deliberately
+-- it's for `stage_a`'s (Snow17's) non-differentiable inputs specifically,
+since `stage_a` is called with fresh perturbed parameters repeatedly and
+needs its forcing on every call. `stage_b` (SAC-SMA) only ever needs its
+*own* static forcing plus whatever RAIM it's handed -- since that forcing
+never changes within one `CoupledNWSStack` instance, closing over it
+(`self._sacsma_forcing`, read inside the bound `_stage_sacsma` method)
+avoids widening `CoupledTwoStageFunction`'s already-tested, already-
+committed signature for a second `forcings` argument that would be
+`None`/unused on the `theta_A`-block calls anyway.
+
+**Why synthetic-target recovery instead of real observed streamflow:**
+checked, not assumed -- grepped both vendored `test_cases/` trees for
+`obs`/`flow`/`discharge`/`streamflow` file names and found nothing; these
+are NWS model-development test cases, not CAMELS evaluation data with
+ground-truth gauge records. Running the real chain once at HHWM8's actual
+calibrated parameters to generate a synthetic "observed" series, then
+optimizing back to it from a perturbed start, is scoped honestly in the
+test's own docstring as proving gradient flow + optimizer usability, not
+real calibration skill -- that needs actual CAMELS streamflow, which is
+CLAUDE.md's Day 7-10 milestone (parameter network, 30-50 basins), not
+this one.
+
+**Why the first version of this test produced NaN gradients, and why the
+fix is a reparametrization, not a smaller learning rate:** the first
+attempt ran plain `Adam([theta_A, theta_B], lr=0.02)` directly on raw
+physical-unit parameters. `SI` (~1500), `MBASE` (~0), and `PXTEMP`
+(~0.7, must stay near a sensible range) are all in the same tensor;
+Adam's per-step update magnitude is roughly `lr` in each parameter's own
+raw units regardless of that parameter's sensible range, so one step
+barely nudged `SI` while shoving `MBASE`/`PXTEMP` into physically invalid
+territory the Fortran call couldn't handle, producing NaN on the very
+next gradient. A smaller global `lr` would have papered over this by
+making all parameters converge glacially slowly rather than fixing the
+actual mismatch (heterogeneous natural scales sharing one step size).
+Fixed by optimizing `z = theta / scale` (dimensionless, every parameter
+starting at O(1) regardless of its physical units) and reconstructing
+`theta = z * scale` each forward pass -- ordinary differentiable
+multiplication, so autograd chains the gradient back through it for
+free; no changes needed to `coupling.py` or `pipeline.py`, this is
+purely how the test's optimization loop is set up. Standard practice for
+optimizing physical parameters at heterogeneous scales directly, not a
+one-off workaround.
+
+**What the actual result looked like, for the record:** loss (`1 -
+NSE`) started at `0.020` (NSE `0.980`) from a 15%-perturbed initial
+guess and dropped to `~0.0003` (NSE `0.9997`) within the first couple of
+gradient steps on a real HHWM8 water year -- strong evidence the
+gradients carry real, usable optimization information end to end through
+both Fortran models, not just that they're finite and non-zero.

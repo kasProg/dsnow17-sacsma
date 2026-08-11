@@ -101,10 +101,27 @@ class CoupledTwoStageFunction(torch.autograd.Function):
         ctx.forcings = forcings
         ctx.output_a_base = output_a  # RAIM, held fixed for the theta_B block
         ctx.output_b_base = output_b  # runoff, reused by forward-difference mode
-        ctx.out_dtype = theta_A.dtype
-        ctx.out_device = theta_A.device
+        # theta_A and theta_B are NOT assumed to share a dtype/device --
+        # in the real integration Snow17 is float32 and SAC-SMA is
+        # float64 (see notes/NOTES.md). Each gradient must be cast back
+        # to its OWN leaf's original dtype/device, not the other's --
+        # tests/test_coupling_toy.py used float64 for both blocks, which
+        # silently masked this until the real wrappers were wired in
+        # (see notes/logs.md).
+        ctx.theta_A_dtype, ctx.theta_A_device = theta_A.dtype, theta_A.device
+        ctx.theta_B_dtype, ctx.theta_B_device = theta_B.dtype, theta_B.device
 
-        return torch.as_tensor(output_b, dtype=theta_A.dtype, device=theta_A.device)
+        # Output dtype: float64 always, matching the last stage's (SAC-SMA)
+        # true computational precision, independent of either theta's
+        # dtype -- not tied to theta_A's dtype, which would silently
+        # truncate the forward pass's own fidelity whenever theta_A
+        # happens to be float32. np.array(..., copy=True) rather than
+        # torch.as_tensor directly on output_b: some real stage_b
+        # implementations (e.g. ctypes-backed ones) can return read-only
+        # or externally-owned buffers, which torch.as_tensor would wrap
+        # without copying -- undefined behavior if anything downstream
+        # writes into it. Cheap insurance, not a hot path.
+        return torch.as_tensor(np.array(output_b, copy=True), dtype=torch.float64)
 
     @staticmethod
     def backward(ctx, grad_output):
@@ -129,8 +146,8 @@ class CoupledTwoStageFunction(torch.autograd.Function):
             base_output=ctx.output_b_base,
         )
 
-        grad_theta_A_t = torch.as_tensor(grad_theta_A, dtype=ctx.out_dtype, device=ctx.out_device)
-        grad_theta_B_t = torch.as_tensor(grad_theta_B, dtype=ctx.out_dtype, device=ctx.out_device)
+        grad_theta_A_t = torch.as_tensor(grad_theta_A, dtype=ctx.theta_A_dtype, device=ctx.theta_A_device)
+        grad_theta_B_t = torch.as_tensor(grad_theta_B, dtype=ctx.theta_B_dtype, device=ctx.theta_B_device)
         return grad_theta_A_t, grad_theta_B_t, None, None, None, None, None
 
 

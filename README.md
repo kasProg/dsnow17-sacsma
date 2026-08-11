@@ -8,16 +8,24 @@ models). See [CLAUDE.md](CLAUDE.md) for the full design writeup and status
 log. (Repo name predates the current plan and hasn't been settled yet — see
 CLAUDE.md's repo layout note.)
 
-**Status:** Both Fortran shims built and tested — Snow-17
-(`fortran/snow17_shim.f90`) and SAC-SMA (`fortran/sacsma_shim.f90`).
-Snow-17's Tesseract wrapper is built and gradient-checked end-to-end,
-including through a real `torch` graph via `tesseract-torch`'s
-`apply_tesseract()`. SAC-SMA's Tesseract wrapper and the cross-model
-gradient-coupling logic (`src/coupling.py`, "option 1.5" in CLAUDE.md) are
-not yet built. Native-PyTorch HBV is **not** the current plan — it's the
-documented Aug 20 fallback only, see CLAUDE.md. `tesseract build`
-(containerizing for submission) is blocked on this development machine —
-see [Reproduce](#reproduce) and [notes/logs.md](notes/logs.md).
+**Status:** Both Fortran shims built and tested. Both Tesseract wrappers
+(`tesseracts/snow17/`, `tesseracts/sacsma/`) built and gradient-checked
+end-to-end, including through real `torch` graphs via `tesseract-torch`'s
+`apply_tesseract()`. The cross-model gradient-coupling design
+(`src/coupling.py`, "option 1.5" in CLAUDE.md) is built, validated against
+autograd ground truth + an independent brute-force check on cheap
+stand-ins first (`tests/test_coupling_toy.py`), then wired to the real
+Tesseracts (`src/pipeline.py`). **CLAUDE.md's Day 5-6 checkpoint is
+met:** chaining Snow17 -> SAC-SMA -> an NSE-style loss -> `.backward()`
+on real HHWM8 data and optimizing from a perturbed initial guess drives
+the loss from 0.020 to ~0.0003 within a couple of gradient steps
+(`tests/test_pipeline_hhwm8.py`) — gradients are flowing end to end
+through both Fortran models and carry real, usable optimization signal.
+Native-PyTorch HBV is **not** the current plan — it's the documented Aug
+20 fallback only, see CLAUDE.md. Not yet built: the parameter-prediction
+network and multi-basin CAMELS training (CLAUDE.md's Day 7-10). `tesseract
+build` (containerizing for submission) is blocked on this development
+machine — see [Reproduce](#reproduce) and [notes/logs.md](notes/logs.md).
 
 **Found and fixed one real, live upstream bug along the way:** a Fortran
 implicit-`SAVE` state-leakage bug in SAC-SMA's `sac1.f90` (not gated behind
@@ -76,18 +84,22 @@ fortran/sacsma_shim.f90           same pattern for EXSAC (SAC-SMA)
 fortran/sacsma_build.sh           stages + patches a build-time copy of sac1.f90, then compiles
 src/snow17.py                     ctypes wrapper around the snow17 shim (float32)
 src/sacsma.py                     ctypes wrapper around the sacsma shim (float64)
-src/coupling.py                   cross-model gradient orchestration (option 1.5, see CLAUDE.md) -- not yet built
+src/coupling.py                   cross-model gradient orchestration (option 1.5, see CLAUDE.md)
+src/pipeline.py                   wires the real Tesseracts into coupling.py for one HRU
 tesseracts/snow17/                 Tesseract wrapper: apply() + finite-difference vector_jacobian_product()
-tesseracts/sacsma/                 same, for SAC-SMA -- not yet built
+tesseracts/sacsma/                 same, for SAC-SMA
 tests/test_snow17_shim.py          determinism, state continuity, mass balance + reference cross-checks
 tests/test_sacsma_shim.py          same, for the SAC-SMA shim, + a dedicated implicit-SAVE-patch proof
 tests/test_gradients.py            VJP vs. manual perturbation + torch autograd integration, per Tesseract
+tests/test_coupling_toy.py         validates the coupling mechanism against cheap stand-ins first
+tests/test_pipeline_hhwm8.py       real HHWM8 chain: Snow17 -> SAC-SMA -> NSE -> backward, loss decreases
 notes/NOTES.md                     upstream findings (TPREV, SCF, ADC, bypass_ratio_check, ...) -- writeup material
 notes/logs.md                      rationale log for our own code/design decisions, kept live
 ```
 
-Items not yet built (`src/coupling.py`, `tesseracts/sacsma/`) are listed
-for the target layout; see CLAUDE.md's timeline for sequencing.
+Not yet built: the parameter-prediction network (`src/paramnet.py`) and
+multi-basin CAMELS training (`src/train.py`); see CLAUDE.md's timeline
+(Day 7-10) for sequencing.
 
 ## License
 

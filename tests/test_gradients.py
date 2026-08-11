@@ -1,4 +1,5 @@
-"""Tests for tesseracts/snow17/tesseract_api.py.
+"""Tests for tesseracts/snow17/tesseract_api.py and
+tesseracts/sacsma/tesseract_api.py.
 
 Two things this file exists to prove, per CLAUDE.md's Day 3-4 milestone:
 
@@ -326,4 +327,181 @@ def test_backward_through_apply_tesseract(tess, param):
     assert autograd_grad != 0.0, (
         f"d(loss)/d({param}) came back exactly 0.0 through autograd -- gradients aren't "
         "actually flowing, which is the load-bearing claim this whole project rests on."
+    )
+
+
+# =============================================================================
+# tesseracts/sacsma/tesseract_api.py -- same structure as above, adapted for
+# SAC-SMA's specifics (float64, 16 differentiable params, no excluded
+# curve parameter, TCI/eta as the differentiable outputs). See that
+# module's docstring and notes/NOTES.md for what's different from Snow17
+# and why (real kind, DUAMEL scope, the bypass_ratio_check patch).
+# =============================================================================
+
+from sacsma import STATE_SIZE, SacSmaParams, run_sacsma  # noqa: E402
+
+SACSMA_TESSERACT_DIR = REPO_ROOT / "tesseracts" / "sacsma"
+
+SACSMA_DIFFERENTIABLE_PARAMS = (
+    "uztwm", "uzfwm", "uzk", "pctim", "adimp", "riva", "zperc", "rexp",
+    "lztwm", "lzfsm", "lzfpm", "lzsk", "lzpk", "pfree", "side", "rserv",
+)
+
+
+@pytest.fixture(scope="module")
+def tess_sacsma():
+    return Tesseract.from_tesseract_api(str(SACSMA_TESSERACT_DIR / "tesseract_api.py"))
+
+
+def _sacsma_synthetic_inputs(n=200, seed=0):
+    rng = np.random.default_rng(seed)
+    return {
+        "dtm": 86400.0,
+        "pcp": rng.gamma(1.0, 3.0, n),
+        "tmp": rng.normal(10, 8, n),
+        "etp": np.abs(rng.gamma(1.0, 2.0, n)),
+        "uztwm": 30.0, "uzfwm": 25.0, "uzk": 0.3, "pctim": 0.01, "adimp": 0.05,
+        "riva": 0.01, "zperc": 100.0, "rexp": 3.0, "lztwm": 130.0, "lzfsm": 25.0,
+        "lzfpm": 60.0, "lzsk": 0.05, "lzpk": 0.01, "pfree": 0.15, "side": 0.0, "rserv": 0.3,
+        "state0": np.zeros(STATE_SIZE),
+    }
+
+
+def test_sacsma_apply_matches_shim_directly(tess_sacsma):
+    inputs = _sacsma_synthetic_inputs()
+    out = tess_sacsma.apply(inputs)
+
+    params = SacSmaParams(
+        uztwm=inputs["uztwm"], uzfwm=inputs["uzfwm"], uzk=inputs["uzk"], pctim=inputs["pctim"],
+        adimp=inputs["adimp"], riva=inputs["riva"], zperc=inputs["zperc"], rexp=inputs["rexp"],
+        lztwm=inputs["lztwm"], lzfsm=inputs["lzfsm"], lzfpm=inputs["lzfpm"], lzsk=inputs["lzsk"],
+        lzpk=inputs["lzpk"], pfree=inputs["pfree"], side=inputs["side"], rserv=inputs["rserv"],
+    )
+    direct = run_sacsma(
+        inputs["pcp"], inputs["tmp"], inputs["etp"], params,
+        state0=inputs["state0"], dtm=inputs["dtm"],
+    )
+
+    np.testing.assert_array_equal(out["q"], direct.q)
+    np.testing.assert_array_equal(out["eta"], direct.eta)
+    np.testing.assert_array_equal(out["bfncc"], direct.bfncc)
+    np.testing.assert_array_equal(out["state_final"], direct.state)
+
+
+def _sacsma_to_shapedtype(value) -> dict:
+    arr = np.asarray(value)
+    dtype = str(arr.dtype)
+    if dtype == "int64":
+        dtype = "int32"
+    return {"shape": list(arr.shape), "dtype": dtype}
+
+
+def test_sacsma_abstract_eval_matches_apply_shapes(tess_sacsma):
+    inputs = _sacsma_synthetic_inputs(n=45)
+    out = tess_sacsma.apply(inputs)
+    abstract_inputs = {k: _sacsma_to_shapedtype(v) for k, v in inputs.items()}
+    abstract_out = tess_sacsma.abstract_eval(abstract_inputs)
+    for key in ("q", "eta", "qs", "qg", "roimp", "sdro", "ssur", "sif", "bfs", "bfp", "bfncc", "state_final"):
+        assert tuple(abstract_out[key]["shape"]) == np.asarray(out[key]).shape
+
+
+@pytest.mark.parametrize("param", SACSMA_DIFFERENTIABLE_PARAMS)
+def test_sacsma_vjp_matches_manual_perturbation(tess_sacsma, param):
+    """Same structure as test_vjp_matches_manual_perturbation above, for
+    SAC-SMA's q/eta outputs. See that test's docstring for what this
+    does and doesn't prove (wiring correctness, not FD accuracy)."""
+    import tesseract_api as api
+
+    inputs = _sacsma_synthetic_inputs()
+    base = tess_sacsma.apply(inputs)
+    n = len(base["q"])
+
+    cotangent = {"q": np.ones(n), "eta": np.ones(n)}
+    vjp = tess_sacsma.vector_jacobian_product(
+        inputs, vjp_inputs=[param], vjp_outputs=["q", "eta"], cotangent_vector=cotangent
+    )
+
+    validated = api.InputSchema(**inputs)
+    base_value = float(getattr(validated, param))
+    eps = _fd_step(base_value)
+    perturbed_inputs = dict(inputs)
+    perturbed_inputs[param] = base_value + eps
+    perturbed = tess_sacsma.apply(perturbed_inputs)
+
+    q_diff = (np.asarray(perturbed["q"]) - np.asarray(base["q"])).sum()
+    eta_diff = (np.asarray(perturbed["eta"]) - np.asarray(base["eta"])).sum()
+    manual_grad = (q_diff + eta_diff) / eps
+
+    np.testing.assert_allclose(float(vjp[param]), manual_grad, rtol=1e-4, atol=1e-8)
+
+
+def test_sacsma_vjp_linear_in_cotangent(tess_sacsma):
+    inputs = _sacsma_synthetic_inputs()
+    n = len(tess_sacsma.apply(inputs)["q"])
+    ones = np.ones(n)
+    zeros = np.zeros(n)
+
+    vjp_q = tess_sacsma.vector_jacobian_product(
+        inputs, vjp_inputs=list(SACSMA_DIFFERENTIABLE_PARAMS), vjp_outputs=["q", "eta"],
+        cotangent_vector={"q": ones, "eta": zeros},
+    )
+    vjp_eta = tess_sacsma.vector_jacobian_product(
+        inputs, vjp_inputs=list(SACSMA_DIFFERENTIABLE_PARAMS), vjp_outputs=["q", "eta"],
+        cotangent_vector={"q": zeros, "eta": ones},
+    )
+    vjp_both = tess_sacsma.vector_jacobian_product(
+        inputs, vjp_inputs=list(SACSMA_DIFFERENTIABLE_PARAMS), vjp_outputs=["q", "eta"],
+        cotangent_vector={"q": ones, "eta": ones},
+    )
+
+    for p in SACSMA_DIFFERENTIABLE_PARAMS:
+        np.testing.assert_allclose(
+            float(vjp_q[p]) + float(vjp_eta[p]), float(vjp_both[p]), rtol=1e-5, atol=1e-10
+        )
+
+
+def test_sacsma_vjp_rejects_unknown_param():
+    """Unlike Snow17 (ADC deliberately excluded), all 16 named SAC-SMA
+    parameters are differentiable -- so this checks the same
+    fail-loudly-not-silently guardrail against a param that plain
+    doesn't exist, rather than a deliberately-excluded one."""
+    import tesseract_api as api
+
+    with pytest.raises(ValueError, match="dtm"):
+        inputs_model = api.InputSchema(**_sacsma_synthetic_inputs())
+        api.vector_jacobian_product(
+            inputs_model, vjp_inputs={"dtm"}, vjp_outputs={"q"},
+            cotangent_vector={"q": np.ones(200)},
+        )
+
+
+@pytest.mark.parametrize("param", ("uztwm", "uzk"))
+def test_sacsma_backward_through_apply_tesseract(tess_sacsma, param):
+    """Same end-to-end autograd proof as test_backward_through_apply_tesseract,
+    for SAC-SMA."""
+    torch = pytest.importorskip("torch")
+    from tesseract_torch import apply_tesseract
+
+    inputs = _sacsma_synthetic_inputs()
+    inputs = dict(inputs)
+    inputs[param] = torch.tensor(inputs[param], dtype=torch.float64, requires_grad=True)
+
+    out = apply_tesseract(tess_sacsma, inputs)
+    loss = out["q"].sum() + out["eta"].sum()
+    loss.backward()
+
+    autograd_grad = inputs[param].grad.item()
+
+    static_inputs = dict(inputs)
+    static_inputs[param] = float(static_inputs[param].detach())
+    n = len(tess_sacsma.apply(static_inputs)["q"])
+    cotangent = {"q": np.ones(n), "eta": np.ones(n)}
+    vjp = tess_sacsma.vector_jacobian_product(
+        static_inputs, vjp_inputs=[param], vjp_outputs=["q", "eta"], cotangent_vector=cotangent
+    )
+
+    np.testing.assert_allclose(autograd_grad, float(vjp[param]), rtol=1e-4, atol=1e-8)
+    assert autograd_grad != 0.0, (
+        f"d(loss)/d({param}) came back exactly 0.0 through autograd for SAC-SMA -- "
+        "same load-bearing-gradients concern as the snow17 version of this test."
     )

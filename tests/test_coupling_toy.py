@@ -248,3 +248,40 @@ def test_raim_never_requires_grad_on_theta_b_path(forcings, observed):
         "stage_a's call count changed during what should be theta_B's "
         "isolated sweep -- RAIM leaked into a path that reruns Snow17."
     )
+
+
+def test_mixed_dtype_thetas_get_matching_gradient_dtypes(forcings, observed):
+    """Regression test for a real bug caught only once the real Tesseracts
+    were wired in: Snow17 predicts/consumes float32, SAC-SMA float64 (see
+    notes/NOTES.md). Every other test in this file uses float64 for BOTH
+    theta_A and theta_B, which silently masked forward()/backward()
+    originally casting both gradients (and the output) to theta_A's
+    dtype regardless of theta_B's own -- wrong whenever the two blocks
+    don't share a dtype, which is exactly the real integration's case.
+    Fixed in src/coupling.py to track each leaf's dtype/device
+    separately; this test exists so a regression shows up here, in a
+    cheap toy run, rather than being caught only when the real,
+    much-slower Fortran-backed pipeline is exercised.
+    """
+    theta_A = torch.tensor(THETA_A0, dtype=torch.float32, requires_grad=True)
+    theta_B = torch.tensor(THETA_B0, dtype=torch.float64, requires_grad=True)
+    fd = FDConfig(rel=1e-3, floor=1e-5, central=True)
+
+    stage_a = _CountingStage(toy_snow_numpy)
+    stage_b = _CountingStage(toy_sac_numpy)
+    runoff = CoupledTwoStageFunction.apply(theta_A, theta_B, forcings, stage_a, stage_b, fd, fd)
+    assert runoff.dtype == torch.float64
+
+    obs_t = torch.tensor(observed, dtype=torch.float64)
+    loss = nse_loss_torch(runoff, obs_t)
+    loss.backward()
+
+    assert theta_A.grad.dtype == torch.float32, (
+        f"theta_A.grad has dtype {theta_A.grad.dtype}, expected float32 -- "
+        "gradients must come back in each leaf's OWN dtype, not the other block's."
+    )
+    assert theta_B.grad.dtype == torch.float64, (
+        f"theta_B.grad has dtype {theta_B.grad.dtype}, expected float64."
+    )
+    assert torch.all(torch.isfinite(theta_A.grad))
+    assert torch.all(torch.isfinite(theta_B.grad))

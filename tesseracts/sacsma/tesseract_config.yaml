@@ -1,0 +1,30 @@
+# Tesseract configuration for the SAC-SMA wrapper.
+# See tesseracts/sacsma/tesseract_api.py for the endpoint implementations.
+
+name: "sacsma"
+version: "0.1.0"
+description: >
+  Differentiable SAC-SMA (NOAA-OWP, Apache-2.0) wrapped for Tesseract.
+  apply() runs EXSAC over a daily time series for one HRU via
+  fortran/sacsma_shim.f90 (built against a build-time-patched copy of
+  sac1.f90 -- see patches/ and notes/NOTES.md for the upstream defect
+  this fixes); vector_jacobian_product() computes gradients w.r.t. the
+  16 learnable scalar parameters by forward-difference finite differences
+  over full rollouts. Composed with tesseracts/snow17/ via
+  src/coupling.py, not via standard automatic Tesseract composition --
+  see notes/NOTES.md's "why we bypass tesseract-torch's automatic
+  composition" writeup.
+
+build_config:
+  target_platform: "native"
+
+  # NOT YET CONFIGURED: same Docker blocker as tesseracts/snow17/ -- see
+  # that config's comment and notes/logs.md. Developed/tested locally via
+  # tesseract_core.Tesseract.from_tesseract_api(), no container needed --
+  # see tests/test_gradients.py. Once unblocked, this will need:
+  #   extra_packages: [gfortran, patch]
+  #   package_data: [[fortran, fortran], [src, src], [patches, patches]]
+  #   custom_build_steps: run fortran/sacsma_build.sh inside the
+  #     container (stages + patches + compiles from source) -- do NOT
+  #     ship the host-built .so, same glibc/arch-mismatch reasoning as
+  #     the snow17 config.
