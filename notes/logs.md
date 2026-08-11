@@ -596,3 +596,117 @@ basin at all. A passing cross-check here demonstrates the shim's
 plumbing is correct, not that the bug was inconsequential -- those are
 different claims, and NOTES.md states which one is actually supported by
 the evidence.
+
+---
+
+## 2026-08-11 — `src/coupling.py`: cross-container gradient coupling, prototyped first
+
+**What:** `CoupledTwoStageFunction`, a single `torch.autograd.Function`
+implementing CLAUDE.md's "option 1.5" gradient-coupling design, plus
+`FDConfig` (per-parameter relative-step, floored, central-difference
+config). Validated against cheap toy stand-ins
+(`tests/test_coupling_toy.py`) before ever touching the real Tesseracts,
+per CLAUDE.md's explicit "prototype on day 3-4 before committing."
+
+**Why one `Function` instead of the split I originally proposed (custom
+autograd for theta_A, normal `apply_tesseract()` composition for
+theta_B):** user correction, and right — that split leaves a real open
+question about how two structurally different gradient computations
+(one from a hand-rolled `backward()`, one from Tesseract's own VJP
+machinery composed automatically) correctly merge into the same upstream
+network's `.backward()` without double-counting or sign errors. Folding
+both parameter blocks into one `Function`'s `backward()` makes that
+question not exist: both blocks reach the shared LSTM/MLP through the
+exact same, single autograd node, and both are computed with the same
+manual FD-sweep code path (`_fd_vjp_block`) -- theta_B's block is just a
+shorter version of theta_A's (no `stage_a` re-run, RAIM held at a cached
+base), not a different mechanism entirely. "Symmetry over hybrid," per
+the correction.
+
+**Why the `Function` returns `runoff` (via a real VJP: perturb, rerun,
+dot the resulting *output* series against the incoming cotangent) rather
+than differencing the loss directly:** second correction, also right.
+Differencing the loss directly (`(loss(theta+eps) - loss(theta))/eps`)
+would have baked a specific loss function into the coupling layer --
+swapping NSE for KGE, adding a regularizer, or differentiating something
+downstream of runoff (a routing step, a multi-basin aggregation) would
+all require editing `coupling.py`. Returning `runoff` as a normal
+`torch.Tensor` node and computing `d(runoff)/d(theta)` (dotted with
+whatever cotangent arrives from upstream, which is exactly what a VJP
+is) keeps the loss entirely in ordinary autograd-land, outside this
+file, and is the honest mathematical object rather than a hidden
+shortcut -- worth stating plainly in the writeup, per the user's note.
+Cost is identical either way: each perturbed run already produces the
+full `runoff` series, so keeping it (instead of collapsing straight to
+a scalar loss inside the sweep) costs nothing extra, just a dot product.
+
+**Why `FDConfig` supports per-parameter `rel`/`floor` arrays instead of
+one scalar step size:** real Snow17/SAC-SMA parameters span very
+different scales in the same gradient computation (`UZTWM` ~O(100) mm,
+`UZK` ~O(0.1)) -- a single fixed `eps` is simultaneously too coarse
+for the small-scale parameters (poor local-slope estimate) and
+needlessly fine for the large-scale ones. This mirrors why
+`tesseracts/snow17/tesseract_api.py`'s own `_fd_step` already does
+relative-step-with-floor for its 11 parameters; `FDConfig` generalizes
+that so `coupling.py` doesn't reinvent it differently when the real
+wrappers get plugged in.
+
+**Why central differences, not forward, for both blocks:** user's
+correction -- Snow17 is float32, and forward differences carry a
+leading O(eps) truncation error that's especially noisy at float32
+precision; central differences (`(f(x+eps)-f(x-eps))/2eps`) kill that
+leading term at the cost of one extra evaluation per parameter (26->52
+runs for the real 13-parameter theta_A block -- still cheap). Applied
+central to the theta_B block too, for the "symmetry over hybrid"
+reasoning above, even though SAC-SMA's float64 precision would tolerate
+forward differences better on its own -- consistency of method across
+both blocks was judged more valuable than the small extra saving,
+and `FDConfig(central=False)` remains available (with the cached base
+output reused, not recomputed) if that tradeoff needs revisiting once
+real timing numbers exist.
+
+**How the toy prototype validates it, and why three independent
+checks:** `tests/test_coupling_toy.py` builds cheap numpy stand-ins for
+both stages (a sigmoid-relaxed rain/snow threshold for "Snow17," a
+leaky-reservoir recursion with real memory for "SAC-SMA," matching the
+real problem's shape on purpose -- nonlinear, stateful, heterogeneous
+parameter scales including one deliberately near zero to exercise the
+FD floor) plus torch-native equivalents of the identical math, so
+autograd gives an exact ground-truth gradient. `CoupledTwoStageFunction`'s
+FD-based gradient is checked against that autograd ground truth *and*
+against an independently hand-rolled brute-force central difference of
+the whole pipeline's loss, computed at a different eps than what
+`FDConfig` itself uses in production for that run. The "different eps"
+part is the point, per the user's correction: comparing an FD
+computation to itself at the same step size is tautological (a wiring
+bug -- wrong sign, wrong parameter, wrong output slice -- doesn't
+necessarily shrink or grow with eps, so self-consistency at one eps
+doesn't rule it out); two independently-implemented computations at two
+different step sizes converging to the same answer is real evidence.
+Measured the actual achieved precision before picking a test tolerance
+rather than guessing one (relative errors were 1e-14 to 6e-5 across both
+eps values tested) and set `rtol=1e-3` -- tight enough to actually catch
+a moderate-sized regression, not just loose headroom that would pass
+almost anything.
+
+**Why there's also a call-counting structural test
+(`test_raim_never_requires_grad_on_theta_b_path`), separate from the
+numerical gradient checks:** a numerical match alone wouldn't catch a
+version of this that "accidentally" got the right answer while still
+being expensive -- e.g., if `stage_a` (Snow17) were silently re-invoked
+during the theta_B sweep for some unrelated reason, gradients could
+still come out numerically correct while defeating the entire point of
+option 1.5 (avoiding N re-runs of the expensive stage on the cheap
+parameter block). Wrapping both stages in a call-counting shim and
+asserting exact expected call counts (`1 + 2*n_a` for stage_a, matching
+forward + the central-diff theta_A sweep, never touching stage_a again
+during the theta_B block) makes the cost claim itself a tested
+invariant, not just an assumption from reading the code.
+
+**What's still open going into the real wrapper integration:** the toy
+uses float64 throughout for numerical cleanliness in the ground-truth
+comparison; the real integration has Snow17 predicting/consuming
+float32 and SAC-SMA float64 (see the snow17.py vs sacsma.py dtype notes
+above), so `coupling.py`'s dtype handling at that boundary needs
+explicit attention once `tesseracts/sacsma/` exists and both wrappers
+get plugged in as the real `stage_a`/`stage_b`.

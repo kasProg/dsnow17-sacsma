@@ -198,3 +198,130 @@ calibrated parameter set like this one's would never reach.
 **Upstream reporting:** worth filing, in prose (per CLAUDE.md's
 CONTRIBUTING caveat — describe the bug, quote the offending line, don't
 paste our patch or any other project code). Not yet filed.
+
+---
+
+## Writeup material: why we bypass tesseract-torch's automatic composition
+
+Criterion 5 (execution and technical depth) material — draft paragraph
+below, written while the reasoning is fresh from building
+`src/coupling.py`. Not yet polished for the actual submission writeup,
+but the substance shouldn't change.
+
+**Draft:**
+
+> Composing two Tesseracts through PyTorch's autograd is normally
+> automatic: `tesseract-torch`'s `apply_tesseract()` registers each
+> Tesseract as its own graph node, and a chained `.backward()` calls each
+> node's `vector_jacobian_product` in reverse order, passing the
+> downstream node's gradient as the upstream node's cotangent. We don't
+> use that path for the Snow17→SAC-SMA edge. Standard composition would
+> require SAC-SMA's Tesseract to expose `d(runoff)/d(RAIM)` — a
+> vector-Jacobian product with respect to its own input, which for a
+> multi-year run is a several-thousand-element daily time series, not a
+> handful of scalars. Our Jacobians come from finite differences, and FD
+> cost scales with the dimensionality of what's being differentiated —
+> so that one VJP alone would cost one perturbed SAC-SMA run per RAIM
+> timestep. For a 10-year daily run, roughly 3,650 runs, for a single
+> gradient step. We instead compute Snow17's parameter gradients as an
+> end-to-end VJP across both containers at once (perturb one Snow17
+> parameter, rerun both models, read how the resulting runoff series
+> moved, dot against the incoming cotangent) inside a single custom
+> `torch.autograd.Function` (`src/coupling.py`), never materializing
+> `d(runoff)/d(RAIM)` as an object. This drops the cost for Snow17's ~13
+> parameters to roughly 26–52 model-run pairs per gradient (depending on
+> forward vs. central differencing) instead of thousands, while SAC-SMA's
+> own ~16 parameters remain cheap and ordinary (RAIM held fixed, SAC-SMA
+> reruns alone). The tradeoff, stated plainly: the composition boundary
+> between the two Tesseracts is not fully generic — the gradient path for
+> Snow17's parameters has to know SAC-SMA exists, via this one hand-written
+> coupling layer, rather than falling out for free from two independently
+> reusable containers. We judged that an honest, disclosed cost of this
+> composition, not something to hide, and validated the mechanism against
+> autograd ground truth and an independently-implemented brute-force check
+> on cheap stand-ins before wiring it to the real models
+> (`tests/test_coupling_toy.py`) — see notes/logs.md.
+
+**Where this evidence lives, for citing in the writeup:**
+- The FD-cost argument itself (why merged/naive-split were rejected):
+  CLAUDE.md's "Finite-difference cost analysis" section.
+- The mechanism's design and the three-way validation (autograd ground
+  truth + independent brute-force FD at a different step size + a
+  structural call-count proof that RAIM never re-triggers Snow17 on the
+  cheap parameter block): `notes/logs.md`, "`src/coupling.py`:
+  cross-container gradient coupling, prototyped first."
+- The actual code: `src/coupling.py` (`CoupledTwoStageFunction`),
+  `tests/test_coupling_toy.py`.
+
+---
+
+## Draft: sac1.f90 implicit-SAVE bug report (upstream, not yet filed)
+
+Prose only, per CLAUDE.md's CONTRIBUTING caveat (NOAA-OWP releases repo
+contributions to the public domain — describe the mechanism and quote
+only their own code, no project code). Drafted here so filing it is a
+copy-paste-and-review action, not a from-scratch writing task later.
+
+**Draft issue text:**
+
+> **Title:** `sac1.f90`: local variable `bypass_ratio_check` gets an
+> implicit `SAVE` from its declaration-time initializer, leaking state
+> between calls
+>
+> In `src/sac/sac1.f90`, `bypass_ratio_check` is declared as:
+>
+> ```fortran
+> LOGICAL  :: bypass_ratio_check = .FALSE. ! <-- FLAG for GOTO equivalents
+> ```
+>
+> Per the Fortran standard, a local variable initialized in its own type
+> declaration statement is treated as if it has the `SAVE` attribute —
+> its value persists across calls to the subroutine, the same as a
+> `COMMON` block or module variable would, even though nothing about a
+> plain local declaration suggests that. `bypass_ratio_check` is set to
+> `.TRUE.` in one branch (reached when `UZTWC` goes negative under high
+> ET demand and `UZFWC` can't cover the residual demand either) and is
+> never explicitly reset anywhere else in the subroutine. It gates
+> whether a free-water-to-tension-water rebalancing step runs:
+>
+> ```fortran
+> IF (.NOT. bypass_ratio_check) THEN
+>     IF ((UZTWC / UZTWM) .LT. (UZFWC / UZFWM)) THEN
+>       ... ! transfer water between UZTWC and UZFWC
+>     END IF
+> END IF
+> ```
+>
+> So any call that enters the `UZTWC < 0` branch leaves
+> `bypass_ratio_check` `.TRUE.` for the process's remaining lifetime,
+> silently skipping that rebalancing step on every later call that
+> doesn't itself re-enter that same branch — regardless of whether the
+> ratio condition would otherwise call for it.
+>
+> We confirmed this empirically with a minimal standalone driver
+> (`sac_data_mod.f90` + `sac1.f90` + `ex_sac1.f90`, no other
+> dependencies) that (1) calls `EXSAC` once with inputs crafted to force
+> `UZTWC < 0` and `UZFWC` below the residual ET demand, then (2) calls it
+> again with unrelated, "normal" inputs chosen so the ratio-check step,
+> if it runs, visibly moves water between `UZTWC` and `UZFWC`. The second
+> call's result differs measurably depending solely on whether the first
+> call happened beforehand in the same process — identical inputs to
+> call 2, different output, purely because of call 1's history.
+>
+> `ioModule.f90` shows your team is already aware of this exact class of
+> issue — its `read_sac_parameters` has a comment: *"Use assignment
+> instead of declaration+initialization to avoid SAVE attribute gotcha."*
+> The same fix pattern (move the initializer to an executable assignment
+> at the top of the subroutine body, so it runs fresh every call) appears
+> to have been missed in `sac1.f90`.
+>
+> Happy to share the minimal repro program if useful — keeping this
+> report to a prose description and a quote of the existing code per your
+> CONTRIBUTING guidance on repository contributions.
+
+**Status:** drafted, not filed. Needs a decision on who files it (our
+GitHub account vs. a maintainer's), and ideally reproduction on a second
+toolchain first (CLAUDE.md's own historical caution before filing the
+Snow17 ADC issue) — gfortran version and platform used for our
+confirmation should be noted if filed. Also worth checking whether an
+open issue/PR already covers this before filing a duplicate.
