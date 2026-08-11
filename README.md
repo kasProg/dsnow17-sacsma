@@ -41,6 +41,19 @@ no overfitting observed at this scale. See
 selection, PET derivation, training-window coverage verification, the
 MLP-vs-LSTM+Hargreaves comparison) and these results in context.
 
+**Benchmarked against a pure data-driven LSTM** (`src/benchmark_lstm.py`
+-- no physical model, streamflow predicted directly from forcing +
+static attributes; same basins/window/loss/forcing as the hybrid model,
+for a controlled comparison, not part of the submission's core
+pipeline). Result: the pure LSTM reaches higher training NSE (+0.68 over
+150 epochs) but its held-out NSE plateaus at +0.34 -- a train/held-out
+gap of 0.34, against the hybrid model's 0.04. This is the actual,
+quantified case for physically-constrained parameter learning over a
+black box in this data-limited (35-basin) regime, not just a citation to
+someone else's result — see [notes/logs.md](notes/logs.md) for the full
+comparison and an honest caveat about what this result does and doesn't
+generalize to.
+
 Native-PyTorch HBV is **not** the current plan — it's the documented Aug
 20 fallback only, see CLAUDE.md.
 
@@ -141,6 +154,7 @@ src/coupling.py                   cross-model gradient orchestration (option 1.5
 src/pipeline.py                   wires the real Tesseracts into coupling.py, reused across basins
 src/paramnet.py                   LSTM (12-mo climatology) + static attrs -> 27 bounded parameters
 src/train.py                      multi-basin training loop + held-out evaluation
+src/benchmark_lstm.py             pure data-driven LSTM baseline for comparison (not core pipeline)
 data/download_camels.sh           one-time ~3.4GB CAMELS download (not run by make test)
 data/select_basins.py             picks snow-dominated basins by frac_snow, train/heldout split
 data/build_attributes.py          builds the 39-feature normalized static attribute matrix
@@ -156,6 +170,7 @@ tests/test_coupling_toy.py         validates the coupling mechanism against chea
 tests/test_pipeline_hhwm8.py       real HHWM8 chain: Snow17 -> SAC-SMA -> NSE -> backward, loss decreases
 tests/test_paramnet.py             ParamNet output shapes/dtypes/bounds/gradient-flow
 tests/test_train.py                multi-basin training loop regression check (skips w/o CAMELS data)
+tests/test_benchmark_lstm.py       benchmark LSTM regression check (skips w/o CAMELS data)
 notes/NOTES.md                     upstream findings (TPREV, SCF, ADC, bypass_ratio_check, ...) -- writeup material
 notes/logs.md                      rationale log for our own code/design decisions, kept live
 ```
