@@ -2,9 +2,11 @@
 
 # Project-local venv, managed by uv. Created once; `make test` depends on
 # it so a fresh clone just needs `make test` after the submodule is
-# checked out.
+# checked out. `uv venv` errors if .venv already exists (no implicit
+# reuse), so guard creation -- otherwise every `make test` after the
+# first fails outright instead of just reinstalling requirements.
 env:
-	uv venv .venv --python 3.11
+	[ -d .venv ] || uv venv .venv --python 3.11
 	uv pip install --python .venv/bin/python -r requirements.txt
 
 build:

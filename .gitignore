@@ -26,6 +26,22 @@ __pycache__/
 data/camels/*
 !data/camels/selected_basins.csv
 
+# src/train.py's default output_dir is timestamped
+# (results/runs/<model>_<split>_<timestamp>/) -- exploratory runs
+# shouldn't accumulate in git. The two canonical, reproducible reference
+# runs (results/README.md) are explicitly kept.
+results/runs/*
+!results/runs/hybrid_spatial_seed0/
+!results/runs/benchmark_lstm_spatial_seed0/
+results/predictions/
+
+# Hydra's own bookkeeping (config.yaml, overrides.yaml, hydra.yaml,
+# <job>.log) nests inside each run's output_dir (configs/config.yaml's
+# hydra.run.dir) -- ignored wherever a run happens to land, as a
+# safety net in case output_dir is ever overridden to somewhere untracked.
+.hydra/
+*.log
+
 # OS / editor
 .DS_Store
 .vscode/

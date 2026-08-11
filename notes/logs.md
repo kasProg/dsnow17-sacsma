@@ -1230,3 +1230,111 @@ runs (expected -- different random init, same architecture/data), but
 the actual claim -- hybrid's gap is a small fraction of the pure LSTM's
 -- held up under a second, independent, saved, reproducible run rather
 than being a one-off artifact of a lucky unseeded initialization.
+
+## Parked for later (separate branch): dHBV-scale SOTA comparison
+
+Discussed replacing `ParamNet`'s 12-month climatology input with a raw
+daily sequence (rho=365, dHBV/dPL terminology for the LSTM lookback
+window) fed straight into the LSTM. Conclusion of that discussion:
+genuinely useful direction, but NOT a strict upgrade to adopt on faith --
+we already have direct evidence (the pure-LSTM benchmark above) that a
+similarly long raw daily sequence overfits badly at this basin count
+(35), and switching away from climatology trades a decades-averaged,
+robust signal for a single-realization one. Treat as an ablation to
+measure (climatology vs. rho=365 vs. both), not a default replacement.
+
+The actual motivation surfaced during that discussion: the user wants
+this evaluated against state-of-the-art differentiable hydrology models
+(dHBV / dPL-style) properly -- not just our own 35-basin/3-year
+controlled comparison above, but the standard CAMELS-671-basin
+benchmark protocol those papers use (all 671 basins, and the same
+temporal train/test period dHBV trains/tests on, not our 45-basin
+snow-dominated spatial-holdout subset). That's a materially bigger data
+pull (full 671-basin CAMELS forcing/streamflow + attributes, all
+already downloaded via `data/download_camels.sh`'s bulk archive -- no
+new download needed, just no longer restricting to the 45 snow-dominated
+IDs), a different split (temporal, not spatial -- see the
+`configs/split/temporal.yaml` stub added in the Hydra refactor below,
+built specifically so this experiment has somewhere to plug in later),
+and likely a longer training window matching dHBV's published period.
+
+**Explicitly deferred, not dropped.** Do on a separate branch, after the
+hackathon-scope pipeline (45-basin spatial-holdout, current
+`results/`) is finished and written up. Do not let this pull focus from
+the finishable submission -- CLAUDE.md's own "flag scope creep hard"
+instruction applies directly here.
+
+## Config-driven training/inference refactor (Hydra)
+
+Requested separately from the above: not the 671-basin experiment
+itself, but the infrastructure to run *any* experiment (this project's
+current 45-basin spatial-holdout setup, or the parked 671-basin/temporal
+one later, or anything in between) from a config file instead of
+hardcoded constants (`WINDOW_START`/`WINDOW_END` module globals in the
+old `src/train.py`, a second copy of the same training-loop shape in
+`src/benchmark_lstm.py`).
+
+Design:
+- `configs/data/*.yaml` -- which CAMELS derived files to load (currently
+  only `camels_snow35.yaml`, the existing 45-basin selection; a future
+  `camels_full671.yaml` for the parked experiment above is a natural
+  same-shape addition later, not built now).
+- `configs/split/{spatial,temporal}.yaml` -- **the actual point of this
+  refactor**: split mode is now a first-class, swappable config, not an
+  assumption baked into the code. `spatial` = current behavior (fixed
+  window, basins partitioned train/heldout via `data/select_basins.py`'s
+  own `split` column -- prediction in ungauged basins). `temporal` = new
+  mode, same basin set for both groups, different date windows (train
+  vs. test period -- prediction in ungauged *period*, the shape the
+  parked dHBV comparison will need). `temporal.yaml` is a real, working
+  code path as of this refactor, just not yet exercised by any saved
+  `results/` run.
+- `configs/model/{hybrid,benchmark_lstm}.yaml`, `configs/train/*.yaml` --
+  architecture/optimization hyperparameters, previously scattered across
+  each script's `main()` kwargs.
+- `src/data_module.py` -- `BasinExample` now takes its window as an
+  argument (was a module-level constant); `build_split(cfg)` dispatches
+  on `cfg.split.mode` and returns train/test examples + basin ID lists
+  for either split type from one code path.
+- `src/train.py` -- one Hydra-driven CLI for both models (`model=hybrid`
+  or `model=benchmark_lstm` switches the whole run); `run_training(cfg)`
+  is a plain function underneath the `@hydra.main`-decorated `cli()`, so
+  tests and notebook-style calls don't need Hydra's compose/multirun
+  machinery, only a manually built config object.
+- `src/infer.py` -- new: loads a saved checkpoint + composes a
+  (possibly different) data/split/model config, runs forward-only, saves
+  per-basin simulated streamflow + NSE. Didn't exist before this
+  refactor -- training only ever produced a history JSON, never a
+  reloadable model checkpoint (`torch.save(net.state_dict())` added as
+  part of this same change, in `run_training()`).
+
+Both existing saved results were regenerated through the new CLI with
+the same seed (`results/runs/hybrid_spatial_seed0/`,
+`results/runs/benchmark_lstm_spatial_seed0/`, replacing the old flat
+`results/hybrid_lstm_hargreaves_history.json` /
+`results/benchmark_lstm_history.json` files) to confirm the refactor
+didn't silently change model behavior. Confirmed exactly, not
+approximately: hybrid epoch 1 `train=-0.1576 test=+0.0737` and epoch 25
+(final) `train=+0.6627 test=+0.5194` match the pre-refactor numbers to
+4 decimal places; benchmark epoch 1 `train=-0.3372 test=-0.0632` and
+epoch 150 (final) `train=+0.6756 test=+0.3352` likewise. This is the
+strongest evidence available that the refactor (module restructuring,
+config plumbing, window now passed as an argument instead of a
+module-level constant) changed *only* the surface, not any actual
+computation -- `torch.manual_seed(0)` reproducing the identical
+trajectory epoch-for-epoch through a full rewrite of the surrounding
+code is a much stronger check than either file's tests passing in
+isolation would have been.
+
+Checkpoints are small (SAC-SMA/Snow17's parameters are the only thing
+being learned, not a large network): 128KB (hybrid) / 220KB
+(benchmark) -- fine to commit directly, no LFS/external storage needed.
+
+Also fixed while touching this: `Makefile`'s `env` target
+unconditionally ran `uv venv .venv --python 3.11`, which errors if
+`.venv` already exists -- meaning `make test` (the README's documented
+entrypoint) worked on a fresh clone but failed on every subsequent
+invocation. Guarded with `[ -d .venv ] ||` so it's idempotent. Unrelated
+to the Hydra work but found by literally running the README's own
+reproduce instructions while updating them, and directly relevant to
+this task's "anyone can reproduce" goal.

@@ -1,0 +1,8 @@
+# Matches results/hybrid_lstm_hargreaves_history.json -- ~7s/epoch (35
+# train + 10 heldout basins, each basin costs ~45 real Fortran/Tesseract
+# calls per gradient via finite differences, see CLAUDE.md's FD cost
+# analysis), so 25 epochs is ~3 minutes total. See main README's
+# "Compute" section before scaling n_epochs or basin count up a lot.
+n_epochs: 25
+eval_every: 3
+lr: 3e-3

@@ -1,0 +1,13 @@
+# The current 45-basin selection (data/select_basins.py): top-45 by
+# CAMELS' own frac_snow attribute, area-filtered, 35 train / 10 heldout.
+# Name kept as "camels_snow35" (the training-set size, not the total 45)
+# since that's the number that matters for the spatial split's train set.
+#
+# A future configs/data/camels_full671.yaml (all CAMELS basins, no
+# frac_snow filter) is the natural same-shape addition for the parked
+# dHBV-comparison experiment -- see notes/logs.md -- not built yet.
+name: camels_snow35
+camels_dir: data/camels
+selected_basins_csv: data/camels/selected_basins.csv
+attributes_npz: data/camels/basin_attributes.npz
+climatology_npz: data/camels/basin_climatology.npz

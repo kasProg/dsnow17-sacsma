@@ -9,6 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from omegaconf import OmegaConf
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
@@ -29,27 +30,38 @@ _DATA_AVAILABLE = (
 def test_benchmark_loop_runs_and_loss_improves():
     import torch
 
-    import benchmark_lstm as bl
-    import train
+    from benchmark_lstm import LSTMBenchmark, build_normalized_dynamic_arrays
+    from data_module import build_split
+    from train import run_epoch_benchmark
 
-    selected, X_static, _X_climate = train.load_basins()
-    train_ids = selected.loc[selected["split"] == "train", "gauge_id"].tolist()[:4]
-    heldout_ids = selected.loc[selected["split"] == "heldout", "gauge_id"].tolist()[:2]
+    cfg = OmegaConf.create({
+        "data": {
+            "name": "camels_snow35",
+            "selected_basins_csv": str(CAMELS_DIR / "selected_basins.csv"),
+            "attributes_npz": str(CAMELS_DIR / "basin_attributes.npz"),
+            "climatology_npz": str(CAMELS_DIR / "basin_climatology.npz"),
+        },
+        "split": {
+            "mode": "spatial",
+            "window": {"start": "1990-10-01", "end": "1993-09-30"},
+        },
+    })
+    split = build_split(cfg)
+    train_basins = split.train_examples[:4]
+    heldout_basins = split.test_examples[:2]
+    train_ids = [b.gauge_id for b in train_basins]
 
-    train_basins = [train.BasinExample(g) for g in train_ids]
-    heldout_basins = [train.BasinExample(g) for g in heldout_ids]
+    dynamic_arrays, mean, std = build_normalized_dynamic_arrays(
+        train_basins + heldout_basins, train_ids
+    )
 
-    dynamic_arrays = {ex.gauge_id: bl.build_dynamic_array(ex) for ex in train_basins + heldout_basins}
-    stack = np.concatenate([dynamic_arrays[g] for g in train_ids], axis=0)
-    mean, std = stack.mean(axis=0), stack.std(axis=0)
-
-    net = bl.LSTMBenchmark(n_dynamic=3, n_static=X_static[train_ids[0]].shape[0])
+    net = LSTMBenchmark(n_dynamic=3, n_static=split.X_static[train_ids[0]].shape[0])
     optimizer = torch.optim.Adam(net.parameters(), lr=1e-3)
 
-    nse_before = bl.run_epoch(net, train_basins, X_static, dynamic_arrays, mean, std, optimizer=None)
+    nse_before = run_epoch_benchmark(net, train_basins, split.X_static, dynamic_arrays, mean, std, optimizer=None)
     for _ in range(20):
-        bl.run_epoch(net, train_basins, X_static, dynamic_arrays, mean, std, optimizer)
-    nse_after = bl.run_epoch(net, train_basins, X_static, dynamic_arrays, mean, std, optimizer=None)
+        run_epoch_benchmark(net, train_basins, split.X_static, dynamic_arrays, mean, std, optimizer)
+    nse_after = run_epoch_benchmark(net, train_basins, split.X_static, dynamic_arrays, mean, std, optimizer=None)
 
     mean_before = np.mean(list(nse_before.values()))
     mean_after = np.mean(list(nse_after.values()))
@@ -57,5 +69,5 @@ def test_benchmark_loop_runs_and_loss_improves():
         f"mean train NSE did not improve over 20 epochs: {mean_before:.4f} -> {mean_after:.4f}"
     )
 
-    heldout_nses = bl.run_epoch(net, heldout_basins, X_static, dynamic_arrays, mean, std, optimizer=None)
+    heldout_nses = run_epoch_benchmark(net, heldout_basins, split.X_static, dynamic_arrays, mean, std, optimizer=None)
     assert all(np.isfinite(v) for v in heldout_nses.values())

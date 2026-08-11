@@ -1,0 +1,8 @@
+# src/paramnet.py's ParamNet: LSTM climatology encoder + MLP head ->
+# 27 bounded Snow17/SAC-SMA parameters. The physically-constrained model
+# this project's submission is actually about.
+name: hybrid
+lstm_hidden: 32
+mlp_hidden: 64
+n_hidden_layers: 2
+dropout: 0.1

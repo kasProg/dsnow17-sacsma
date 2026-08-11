@@ -1,0 +1,18 @@
+# Prediction-in-ungauged-period (PUP): the SAME basins (all of
+# data.selected_basins_csv, ignoring its "split" column) are used for
+# both groups, but train_window and test_window cover different dates --
+# generalization is being tested across TIME, not across basin identity.
+#
+# This is the split shape the parked full-CAMELS-671/dHBV-period
+# comparison will need later (see notes/logs.md's "Parked for later"
+# entry) -- added now so the code path exists, but the default windows
+# below are placeholders (test_window's coverage/missingness has NOT
+# been verified the way spatial.yaml's window was -- do that before
+# trusting a real run). Override both windows per experiment.
+mode: temporal
+train_window:
+  start: "1990-10-01"
+  end: "1993-09-30"
+test_window:
+  start: "1993-10-01"
+  end: "1996-09-30"

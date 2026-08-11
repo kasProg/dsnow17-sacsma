@@ -1,12 +1,11 @@
 {
-  "model": "hybrid_snow17_sacsma_paramnet",
+  "model": "hybrid",
+  "split_mode": "spatial",
   "seed": 0,
   "n_epochs": 25,
   "lr": 0.003,
   "n_train_basins": 35,
-  "n_heldout_basins": 10,
-  "window_start": "1990-10-01 00:00:00",
-  "window_end": "1993-09-30 00:00:00",
+  "n_test_basins": 10,
   "train_basin_ids": [
     "11266500",
     "06623800",
@@ -44,7 +43,7 @@
     "06188000",
     "09312600"
   ],
-  "heldout_basin_ids": [
+  "test_basin_ids": [
     "11264500",
     "11230500",
     "12447390",
@@ -60,137 +59,137 @@
     {
       "epoch": 1,
       "mean_train_nse": -0.15759214811910902,
-      "seconds": 8.453314065933228,
-      "mean_heldout_nse": 0.07368146439182394
+      "seconds": 8.25710415840149,
+      "mean_test_nse": 0.07368146439182394
     },
     {
       "epoch": 2,
       "mean_train_nse": -0.051341505656642396,
-      "seconds": 7.801625967025757
+      "seconds": 7.985042333602905
     },
     {
       "epoch": 3,
       "mean_train_nse": 0.051617212106456326,
-      "seconds": 9.018913984298706,
-      "mean_heldout_nse": 0.21174771784255597
+      "seconds": 6.853611946105957,
+      "mean_test_nse": 0.21174771784255597
     },
     {
       "epoch": 4,
       "mean_train_nse": 0.13131061241490663,
-      "seconds": 9.95414113998413
+      "seconds": 9.373278379440308
     },
     {
       "epoch": 5,
       "mean_train_nse": 0.18894942817234592,
-      "seconds": 9.822783470153809
+      "seconds": 9.825933694839478
     },
     {
       "epoch": 6,
       "mean_train_nse": 0.27217534684060146,
-      "seconds": 8.104712963104248,
-      "mean_heldout_nse": 0.364451939977464
+      "seconds": 6.164676666259766,
+      "mean_test_nse": 0.364451939977464
     },
     {
       "epoch": 7,
       "mean_train_nse": 0.30754494859387044,
-      "seconds": 9.492861032485962
+      "seconds": 5.85035252571106
     },
     {
       "epoch": 8,
       "mean_train_nse": 0.34844868072818563,
-      "seconds": 8.265790700912476
+      "seconds": 5.972691535949707
     },
     {
       "epoch": 9,
       "mean_train_nse": 0.37931076726634705,
-      "seconds": 6.543502330780029,
-      "mean_heldout_nse": 0.4633017637010884
+      "seconds": 9.088931560516357,
+      "mean_test_nse": 0.4633017637010884
     },
     {
       "epoch": 10,
       "mean_train_nse": 0.39817150144281643,
-      "seconds": 6.630899906158447
+      "seconds": 7.030158281326294
     },
     {
       "epoch": 11,
       "mean_train_nse": 0.41504049516529384,
-      "seconds": 6.683434963226318
+      "seconds": 6.357721328735352
     },
     {
       "epoch": 12,
       "mean_train_nse": 0.42108528467547235,
-      "seconds": 6.669892072677612,
-      "mean_heldout_nse": 0.5053069856453609
+      "seconds": 8.99531364440918,
+      "mean_test_nse": 0.5053069856453609
     },
     {
       "epoch": 13,
       "mean_train_nse": 0.4550965422360968,
-      "seconds": 6.3035361766815186
+      "seconds": 8.518500328063965
     },
     {
       "epoch": 14,
       "mean_train_nse": 0.4984661741553286,
-      "seconds": 6.467203378677368
+      "seconds": 10.989059448242188
     },
     {
       "epoch": 15,
       "mean_train_nse": 0.5261800044939449,
-      "seconds": 5.2446959018707275,
-      "mean_heldout_nse": 0.5028218385899248
+      "seconds": 5.5273706912994385,
+      "mean_test_nse": 0.5028218385899248
     },
     {
       "epoch": 16,
       "mean_train_nse": 0.5518484514430911,
-      "seconds": 5.327586650848389
+      "seconds": 7.290025234222412
     },
     {
       "epoch": 17,
       "mean_train_nse": 0.5757908899016907,
-      "seconds": 5.488762378692627
+      "seconds": 4.998785495758057
     },
     {
       "epoch": 18,
       "mean_train_nse": 0.5563823714701192,
-      "seconds": 5.2881715297698975,
-      "mean_heldout_nse": 0.4761952811498996
+      "seconds": 4.4059038162231445,
+      "mean_test_nse": 0.4761952811498996
     },
     {
       "epoch": 19,
       "mean_train_nse": 0.587285055099803,
-      "seconds": 5.35446834564209
+      "seconds": 4.520851135253906
     },
     {
       "epoch": 20,
       "mean_train_nse": 0.6004711159530952,
-      "seconds": 6.971920490264893
+      "seconds": 4.399680852890015
     },
     {
       "epoch": 21,
       "mean_train_nse": 0.5759177530803417,
-      "seconds": 6.603487968444824,
-      "mean_heldout_nse": 0.47924696421745033
+      "seconds": 4.470438003540039,
+      "mean_test_nse": 0.47924696421745033
     },
     {
       "epoch": 22,
       "mean_train_nse": 0.6271736367583369,
-      "seconds": 6.8252973556518555
+      "seconds": 4.452758073806763
     },
     {
       "epoch": 23,
       "mean_train_nse": 0.627036109764697,
-      "seconds": 7.718885660171509
+      "seconds": 4.484021186828613
     },
     {
       "epoch": 24,
       "mean_train_nse": 0.6375841330172046,
-      "seconds": 4.740259885787964,
-      "mean_heldout_nse": 0.5093194750511387
+      "seconds": 4.483223915100098,
+      "mean_test_nse": 0.5093194750511387
     },
     {
       "epoch": 25,
       "mean_train_nse": 0.6626524821874349,
-      "seconds": 4.699618339538574,
-      "mean_heldout_nse": 0.5193914414387348
+      "seconds": 4.469968557357788,
+      "mean_test_nse": 0.5193914414387348
     }
   ]
 }

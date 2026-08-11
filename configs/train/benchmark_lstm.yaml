@@ -1,0 +1,7 @@
+# Matches results/benchmark_lstm_history.json -- ~0.7s/epoch (ordinary
+# batched backprop, no per-basin Fortran/Tesseract calls), so 150 epochs
+# is ~2 minutes total -- cheap enough to run far more epochs than the
+# hybrid model's per-epoch cost allows.
+n_epochs: 150
+eval_every: 10
+lr: 1e-3

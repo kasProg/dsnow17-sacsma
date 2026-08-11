@@ -4,3 +4,4 @@ pytest
 torch
 tesseract-core[runtime]
 tesseract-torch
+hydra-core

@@ -1,0 +1,14 @@
+# Prediction-in-ungauged-basins (PUB): one fixed date window, basins
+# partitioned into train/test by data.selected_basins_csv's own "split"
+# column (train/heldout), written once by data/select_basins.py. This is
+# the split CLAUDE.md's Day 7-10 milestone and every results/ JSON so far
+# use.
+#
+# WY1991-1993 chosen because it's verified (not assumed) full daily
+# coverage and <=5% missing streamflow across all 45 selected basins --
+# see notes/logs.md for the window search (WY1981-83 and WY1986-88 each
+# failed for 5-6 basins).
+mode: spatial
+window:
+  start: "1990-10-01"
+  end: "1993-09-30"

@@ -1,125 +1,64 @@
-"""Multi-basin training: ParamNet -> Snow17 + SAC-SMA -> NSE loss, across
-35 snow-dominated CAMELS training basins, with periodic held-out
-evaluation on 10 reserved basins. CLAUDE.md's Day 7-10 milestone.
+"""Config-driven training entrypoint (Hydra) for both models this repo
+trains: the hybrid Snow17+SAC-SMA+ParamNet stack (CLAUDE.md's Day 7-10
+milestone, src/paramnet.py) and the pure-LSTM benchmark
+(src/benchmark_lstm.py) used to quantify what the physical constraint
+buys (see results/README.md). One script, one CLI -- `model=` switches
+which one trains, `split=` switches spatial (prediction in ungauged
+basins) vs. temporal (prediction in ungauged period) evaluation. See
+configs/ and the main README's "Reproducing experiments" section.
 
-Fixed training window: WY1991-1993 (1990-10-01 .. 1993-09-30, 3 years).
-Verified (not assumed) that all 45 selected basins have full daily
-coverage and <=5% missing streamflow over this window before picking it
--- several earlier candidate windows (WY1981-83, WY1986-88) failed for
-5-6 basins each (see notes/logs.md for the exact search).
+    .venv/bin/python src/train.py                                    # hybrid, spatial (default)
+    .venv/bin/python src/train.py model=benchmark_lstm train=benchmark_lstm
+    .venv/bin/python src/train.py split=temporal seed=1
 
-One gradient step per epoch, not per basin: theta_A/theta_B are computed
-for all 35 training basins in a single batched ParamNet forward pass,
-then each basin's own (expensive, Fortran-backed) CoupledTwoStageFunction
-call runs individually -- that part isn't batchable, SAC-SMA/Snow17 are
-single-HRU by construction -- and their losses are averaged into ONE
-scalar before a single .backward()/optimizer.step() call. This is
-standard full-batch gradient descent over basins, not per-basin SGD:
-each step reflects the whole training set's gradient, not one basin's
-noisy estimate of it.
+Kept as a plain function (run_training(cfg)) wrapped by a thin
+@hydra.main CLI (cli()) at the bottom -- tests and results/README.md's
+regeneration snippets call run_training() directly with a manually built
+config, no Hydra compose/multirun machinery needed for that path.
+
+One gradient step per epoch, not per basin (hybrid model only -- the
+benchmark model already batches every basin through one LSTM forward
+pass): theta_A/theta_B are computed for all training basins in a single
+batched ParamNet forward pass, then each basin's own (expensive,
+Fortran-backed) CoupledTwoStageFunction call runs individually -- that
+part isn't batchable, SAC-SMA/Snow17 are single-HRU by construction --
+and their losses are averaged into ONE scalar before a single
+.backward()/optimizer.step() call. Standard full-batch gradient descent
+over basins, not per-basin SGD.
 """
 
 from __future__ import annotations
 
+import json
 import sys
 import time
 from pathlib import Path
 
+import hydra
 import numpy as np
-import pandas as pd
 import torch
+from omegaconf import DictConfig, OmegaConf
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "data"))
 
-from camels_loader import load_basin_timeseries  # noqa: E402
-from paramnet import ParamNet  # noqa: E402
-from pipeline import CoupledNWSStack, SacSmaForcing, Snow17Forcing  # noqa: E402
-
-CAMELS_DIR = REPO_ROOT / "data" / "camels"
-WINDOW_START = pd.Timestamp("1990-10-01")
-WINDOW_END = pd.Timestamp("1993-09-30")
-
-# Fixed, not learnable -- Snow17's areal depletion curve. A standard
-# generic curve shape (matches what's used throughout this project's
-# earlier single-basin work), since CLAUDE.md's own plan keeps ADC out
-# of scope for the differentiable parameters (see notes/logs.md).
-DEFAULT_ADC = np.array(
-    [0.05, 0.09, 0.16, 0.31, 0.54, 0.74, 0.84, 0.89, 0.93, 0.97, 1.0], dtype=np.float64
-)
+from benchmark_lstm import build_normalized_dynamic_arrays  # noqa: E402
+from data_module import BasinExample, build_split, masked_nse_loss, nse_value  # noqa: E402
+from model_factory import build_model  # noqa: E402
+from pipeline import CoupledNWSStack  # noqa: E402
 
 
-class BasinExample:
-    """Everything needed to run + score one basin, precomputed once and
-    reused across every epoch (forcing/observations don't change)."""
-
-    def __init__(self, gauge_id: str):
-        ts = load_basin_timeseries(gauge_id)
-        mask = (ts.dates >= WINDOW_START) & (ts.dates <= WINDOW_END)
-        dates = ts.dates[mask]
-
-        self.gauge_id = gauge_id
-        self.snow17_forcing = Snow17Forcing(
-            idt=24, idts=86400,
-            iyr=dates.year.to_numpy().astype(np.int32),
-            imn=dates.month.to_numpy().astype(np.int32),
-            ida=dates.day.to_numpy().astype(np.int32),
-            pcp=ts.prcp[mask], tmp=ts.tmean[mask],
-            alat=ts.lat, elev=ts.elev,
-            adc=DEFAULT_ADC,
-            cs0=np.zeros(19, dtype=np.float64), tprev0=0.0,
-        )
-        self.sacsma_forcing = SacSmaForcing(
-            dtm=86400.0, tmp=ts.tmean[mask], etp=ts.pet[mask],
-            state0=np.zeros(6, dtype=np.float64),
-        )
-        q_obs = ts.q_obs[mask]
-        self.observed = torch.tensor(q_obs, dtype=torch.float64)
-        self.valid_mask = torch.tensor(~np.isnan(q_obs))
-        assert self.valid_mask.sum() > 0, f"{gauge_id}: no valid observed days in window"
-
-
-def masked_nse_loss(sim: torch.Tensor, example: BasinExample) -> torch.Tensor:
-    """1 - NSE, computed only over non-missing observed days."""
-    obs = example.observed[example.valid_mask]
-    sim_valid = sim[example.valid_mask]
-    denom = torch.clamp(torch.sum((obs - obs.mean()) ** 2), min=1e-6)
-    nse = 1.0 - torch.sum((obs - sim_valid) ** 2) / denom
-    return 1.0 - nse
-
-
-def nse_value(sim: torch.Tensor, example: BasinExample) -> float:
-    with torch.no_grad():
-        return float(1.0 - masked_nse_loss(sim, example).item())
-
-
-def load_basins() -> tuple[pd.DataFrame, dict, dict]:
-    """Returns (selected_basins_df, static_attrs_by_gauge_id,
-    climatology_by_gauge_id)."""
-    selected = pd.read_csv(CAMELS_DIR / "selected_basins.csv", dtype={"gauge_id": str})
-    attrs = np.load(CAMELS_DIR / "basin_attributes.npz", allow_pickle=True)
-    gauge_ids = list(attrs["gauge_ids"])
-    X_static = {gid: attrs["X"][i] for i, gid in enumerate(gauge_ids)}
-
-    clim = np.load(CAMELS_DIR / "basin_climatology.npz", allow_pickle=True)
-    clim_ids = list(clim["gauge_ids"])
-    X_climate = {gid: clim["X"][i] for i, gid in enumerate(clim_ids)}
-    assert set(X_static) == set(X_climate), "static/climatology basin sets don't match"
-
-    return selected, X_static, X_climate
-
-
-def run_epoch(
-    net: ParamNet,
+def run_epoch_hybrid(
+    net,
     stack: CoupledNWSStack,
     basins: list[BasinExample],
     X_static: dict,
     X_climate: dict,
     optimizer: torch.optim.Optimizer | None,
 ) -> dict[str, float]:
-    """optimizer=None -> eval mode, no gradient step (used for held-out
-    basins). Returns {gauge_id: nse}."""
+    """optimizer=None -> eval mode, no gradient step. Returns
+    {gauge_id: nse}."""
     x_static_batch = torch.tensor(
         np.stack([X_static[b.gauge_id] for b in basins]), dtype=torch.float64
     )
@@ -154,65 +93,131 @@ def run_epoch(
     return nses
 
 
-def main(
-    n_epochs: int = 15,
-    eval_every: int = 3,
-    lr: float = 3e-3,
-    seed: int = 0,
-    save_path: str | Path | None = None,
-) -> None:
-    torch.manual_seed(seed)  # reproducible network init -- see notes/logs.md
-
-    selected, X_static, X_climate = load_basins()
-    train_ids = selected.loc[selected["split"] == "train", "gauge_id"].tolist()
-    heldout_ids = selected.loc[selected["split"] == "heldout", "gauge_id"].tolist()
-
-    print(f"Loading {len(train_ids)} train + {len(heldout_ids)} heldout basins' timeseries...")
-    t0 = time.time()
-    train_basins = [BasinExample(gid) for gid in train_ids]
-    heldout_basins = [BasinExample(gid) for gid in heldout_ids]
-    print(f"  done in {time.time()-t0:.1f}s")
-
-    net = ParamNet(
-        n_static_features=X_static[train_ids[0]].shape[0],
-        n_climate_features=X_climate[train_ids[0]].shape[1],
+def run_epoch_benchmark(
+    net,
+    basins: list[BasinExample],
+    X_static: dict,
+    dynamic_arrays: dict,
+    dyn_mean: np.ndarray,
+    dyn_std: np.ndarray,
+    optimizer: torch.optim.Optimizer | None,
+) -> dict[str, float]:
+    x_dynamic = torch.tensor(
+        np.stack([(dynamic_arrays[b.gauge_id] - dyn_mean) / dyn_std for b in basins]),
+        dtype=torch.float64,
     )
-    stack = CoupledNWSStack()
-    optimizer = torch.optim.Adam(net.parameters(), lr=lr)
+    x_static = torch.tensor(np.stack([X_static[b.gauge_id] for b in basins]), dtype=torch.float64)
+
+    if optimizer is not None:
+        net.train()
+        q_hat = net(x_dynamic, x_static)
+    else:
+        net.eval()
+        with torch.no_grad():
+            q_hat = net(x_dynamic, x_static)
+
+    losses = []
+    nses = {}
+    for i, ex in enumerate(basins):
+        sim = q_hat[i]
+        loss = masked_nse_loss(sim, ex)
+        losses.append(loss)
+        with torch.no_grad():
+            nses[ex.gauge_id] = float(1.0 - loss.item())
+
+    if optimizer is not None:
+        total_loss = torch.stack(losses).mean()
+        optimizer.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=5.0)
+        optimizer.step()
+
+    return nses
+
+
+def run_training(cfg: DictConfig) -> dict:
+    torch.manual_seed(cfg.seed)  # reproducible network init -- see notes/logs.md
+
+    print(f"Loading basins (data={cfg.data.name}, split={cfg.split.mode})...")
+    t0 = time.time()
+    split = build_split(cfg)
+    print(
+        f"  {len(split.train_ids)} train + {len(split.test_ids)} test basins, "
+        f"loaded in {time.time()-t0:.1f}s"
+    )
+
+    n_static = split.X_static[split.train_ids[0]].shape[0]
+    optimizer_lr = cfg.train.lr
+
+    if cfg.model.name == "hybrid":
+        n_climate = split.X_climate[split.train_ids[0]].shape[1]
+        net = build_model(cfg, n_static, n_climate)
+        stack = CoupledNWSStack()
+        optimizer = torch.optim.Adam(net.parameters(), lr=optimizer_lr)
+
+        def run_epoch(basins, opt):
+            return run_epoch_hybrid(net, stack, basins, split.X_static, split.X_climate, opt)
+
+    elif cfg.model.name == "benchmark_lstm":
+        dynamic_arrays, dyn_mean, dyn_std = build_normalized_dynamic_arrays(
+            split.train_examples + split.test_examples, split.train_ids
+        )
+        net = build_model(cfg, n_static, dynamic_arrays[split.train_ids[0]].shape[1])
+        optimizer = torch.optim.Adam(net.parameters(), lr=optimizer_lr)
+
+        def run_epoch(basins, opt):
+            return run_epoch_benchmark(
+                net, basins, split.X_static, dynamic_arrays, dyn_mean, dyn_std, opt
+            )
+
+    else:
+        raise ValueError(f"unknown model.name: {cfg.model.name!r}")
 
     history = []
-    for epoch in range(1, n_epochs + 1):
+    for epoch in range(1, cfg.train.n_epochs + 1):
         t0 = time.time()
-        train_nses = run_epoch(net, stack, train_basins, X_static, X_climate, optimizer)
+        train_nses = run_epoch(split.train_examples, optimizer)
         mean_train_nse = float(np.mean(list(train_nses.values())))
         dt = time.time() - t0
 
         row = {"epoch": epoch, "mean_train_nse": mean_train_nse, "seconds": dt}
-        if epoch == 1 or epoch % eval_every == 0 or epoch == n_epochs:
-            heldout_nses = run_epoch(net, stack, heldout_basins, X_static, X_climate, optimizer=None)
-            row["mean_heldout_nse"] = float(np.mean(list(heldout_nses.values())))
+        if epoch == 1 or epoch % cfg.train.eval_every == 0 or epoch == cfg.train.n_epochs:
+            test_nses = run_epoch(split.test_examples, None)
+            row["mean_test_nse"] = float(np.mean(list(test_nses.values())))
         history.append(row)
         print(
             f"epoch {epoch:3d}  train_nse={mean_train_nse:+.4f}"
-            + (f"  heldout_nse={row.get('mean_heldout_nse'):+.4f}" if "mean_heldout_nse" in row else "")
-            + f"  ({dt:.1f}s)"
+            + (f"  test_nse={row.get('mean_test_nse'):+.4f}" if "mean_test_nse" in row else "")
+            + f"  ({dt:.2f}s)"
         )
 
-    if save_path is not None:
-        import json
+    output_dir = Path(cfg.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, output_dir / "config.yaml")
+    torch.save(net.state_dict(), output_dir / "checkpoint.pt")
 
-        Path(save_path).write_text(json.dumps({
-            "model": "hybrid_snow17_sacsma_paramnet",
-            "seed": seed, "n_epochs": n_epochs, "lr": lr,
-            "n_train_basins": len(train_ids), "n_heldout_basins": len(heldout_ids),
-            "window_start": str(WINDOW_START), "window_end": str(WINDOW_END),
-            "train_basin_ids": train_ids, "heldout_basin_ids": heldout_ids,
-            "history": history,
-        }, indent=2))
-        print(f"Saved training history -> {save_path}")
+    result = {
+        "model": cfg.model.name,
+        "split_mode": cfg.split.mode,
+        "seed": cfg.seed,
+        "n_epochs": cfg.train.n_epochs,
+        "lr": cfg.train.lr,
+        "n_train_basins": len(split.train_ids),
+        "n_test_basins": len(split.test_ids),
+        "train_basin_ids": split.train_ids,
+        "test_basin_ids": split.test_ids,
+        "history": history,
+    }
+    (output_dir / "history.json").write_text(json.dumps(result, indent=2))
+    print(f"Saved config + checkpoint + history -> {output_dir}")
 
-    return net, history, train_basins, heldout_basins
+    return {"net": net, "output_dir": str(output_dir), **result}
+
+
+@hydra.main(version_base=None, config_path="../configs", config_name="config")
+def cli(cfg: DictConfig) -> None:
+    run_training(cfg)
 
 
 if __name__ == "__main__":
-    main()
+    cli()

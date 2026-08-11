@@ -1,0 +1,33 @@
+# Top-level Hydra config for src/train.py. Defaults below reproduce
+# results/hybrid_lstm_hargreaves_history.json exactly (model=hybrid,
+# split=spatial, seed=0). Override any group from the CLI, e.g.:
+#
+#   .venv/bin/python src/train.py model=benchmark_lstm train=benchmark_lstm
+#   .venv/bin/python src/train.py split=temporal split.test_window.end=1998-09-30
+#   .venv/bin/python src/train.py seed=1 train.lr=1e-3
+#
+# See the main README's "Reproducing experiments" section.
+defaults:
+  - data: camels_snow35
+  - split: spatial
+  - model: hybrid
+  - train: hybrid
+  - _self_
+
+seed: 0
+
+# Each run gets its own timestamped directory: saved config.yaml,
+# checkpoint.pt, history.json -- see src/train.py's run_training().
+output_dir: results/runs/${model.name}_${split.mode}_${now:%Y%m%d-%H%M%S}
+
+hydra:
+  # Don't let Hydra chdir into its own run directory -- this project's
+  # data paths (data/camels/...) are relative to the repo root. Point
+  # Hydra's OWN bookkeeping (.hydra/config.yaml, train.log) at the same
+  # output_dir src/train.py itself writes config.yaml/checkpoint.pt/
+  # history.json to, rather than leaving it at "." (which litters the
+  # repo root with a .hydra/ dir + log file on every single run).
+  job:
+    chdir: false
+  run:
+    dir: ${output_dir}

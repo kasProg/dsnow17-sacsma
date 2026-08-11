@@ -1,0 +1,26 @@
+# Top-level Hydra config for src/infer.py: load a checkpoint from a
+# training run, score it against a (possibly different) split/window.
+# `checkpoint` is mandatory -- pass it on the CLI:
+#
+#   .venv/bin/python src/infer.py checkpoint=results/runs/hybrid_spatial_.../checkpoint.pt
+#
+# model/data must match what the checkpoint was actually trained with
+# (n_static/n_climate feature counts and parameter bounds are read from
+# data at inference time, not saved in the checkpoint -- see
+# src/infer.py's docstring). split can differ from training -- e.g.
+# score a spatial-split checkpoint against a later date window.
+defaults:
+  - data: camels_snow35
+  - split: spatial
+  - model: hybrid
+  - _self_
+
+checkpoint: ???
+
+output_dir: results/predictions/${model.name}_${split.mode}_${now:%Y%m%d-%H%M%S}
+
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${output_dir}
