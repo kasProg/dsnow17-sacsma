@@ -215,7 +215,7 @@ def test_matches_upstream_reference(hru_id):
     out = run_snow17(dates, pcp, tmp, params)
 
     # Reference sneqv is written as sneqv_m*1000 (mm); ours is metres.
-    # These two are the quantities that matter (raim feeds HBV; sneqv is
+    # These two are the quantities that matter (raim feeds SAC-SMA (or HBV, fallback-only); sneqv is
     # the mass state) and they match to float32 precision.
     np.testing.assert_allclose(out.raim, ref["raim"].to_numpy(), atol=5e-3, rtol=1e-3)
     np.testing.assert_allclose(out.sneqv * 1000.0, ref["sneqv"].to_numpy(), atol=5e-3, rtol=1e-3)

@@ -2,6 +2,7 @@
 fortran/*.so
 fortran/*.o
 *.mod
+fortran/_sacsma_patched/
 
 # Extracted from external/snow17/test_cases/ex1.tgz at test time
 external/snow17/test_cases/ex1/

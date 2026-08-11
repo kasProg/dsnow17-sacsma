@@ -53,7 +53,7 @@ DIFFERENTIABLE_PARAMS = (
 
 class InputSchema(BaseModel):
     # Fixed timestep config -- must match what the shim was built/tested
-    # against (fortran/snow17_shim.f90, tests/test_shim.py use idt=24,
+    # against (fortran/snow17_shim.f90, tests/test_snow17_shim.py use idt=24,
     # idts=86400 throughout, i.e. daily).
     idt: Int32
     idts: Int32
@@ -97,7 +97,7 @@ class InputSchema(BaseModel):
 
 
 class OutputSchema(BaseModel):
-    raim: Differentiable[Array[(None,), Float32]]   # mm/day, rain-plus-melt -> feeds HBV
+    raim: Differentiable[Array[(None,), Float32]]   # mm/day, rain-plus-melt -> feeds SAC-SMA (or HBV, fallback-only per CLAUDE.md)
     sneqv: Differentiable[Array[(None,), Float32]]   # m, SWE
     snowh: Array[(None,), Float32]                   # m, snow depth (diagnostic; not differentiated)
     cs_final: Array[(CS_SIZE,), Float32]

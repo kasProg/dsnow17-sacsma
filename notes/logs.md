@@ -58,7 +58,7 @@ already requires this — it unpacks `CS` into a COMMON block at entry and
 repacks at exit, so state has to come from *somewhere* outside the
 function on every call; hiding it inside the shim would just relocate the
 same problem one layer down and make chained/resumable runs impossible.
-(2) It's what the [determinism and state-continuity tests](test_shim.py)
+(2) It's what the [determinism and state-continuity tests](test_snow17_shim.py)
 actually verify — if state were implicit (e.g. a module-level variable
 retained between calls), those tests would be checking the shim's
 plumbing instead of the physics, and would stop being a meaningful guard
@@ -160,7 +160,7 @@ Tesseract-VJP-perturbation callers need to pass `cs0` explicitly.
 
 ---
 
-## 2026-08-10 — `tests/test_shim.py`
+## 2026-08-10 — `tests/test_snow17_shim.py`
 
 **What:** 7 tests — determinism, state continuity, mass balance (the
 three CLAUDE.md calls out as required before the Tesseract wrapper), a
@@ -212,7 +212,7 @@ extracted directory is a side effect of `tar xzf`-ing a file that already
 lives (compressed) inside the pinned submodule — committing the extracted
 copy to *our* repo would duplicate data that's already version-controlled
 upstream (in the submodule) and would go stale if the pinned commit ever
-changes. `tests/test_shim.py::_ensure_ex1_extracted` extracts it on first
+changes. `tests/test_snow17_shim.py::_ensure_ex1_extracted` extracts it on first
 test run instead, so a fresh clone + `git submodule update --init` still
 reproduces without a manual step — which is the actual requirement
 (`README.md` promises one-command reproduction, and CLAUDE.md's
@@ -257,7 +257,7 @@ containerized Tesseract, but rather imports the Tesseract API directly.
 This is useful for debugging, but requires a matching runtime environment
 + all dependencies to be installed locally." That's exactly the
 constraint our own `.venv` already satisfies. All of
-`tests/test_tesseract_api.py` runs through this path -- `apply()`,
+`tests/test_gradients.py` runs through this path -- `apply()`,
 `vector_jacobian_product()`, `abstract_eval()`, and the
 `tesseract_torch.apply_tesseract()` autograd integration are all verified
 working without touching Docker.
@@ -324,7 +324,7 @@ optimization" are different bars.
 **Why `vector_jacobian_product` explicitly casts to `float64` before
 subtracting `perturbed - base`, rather than working in the native
 `float32` of the rollout outputs:** found empirically, not designed in
-up front -- see the `tests/test_tesseract_api.py` entry below. `perturbed`
+up front -- see the `tests/test_gradients.py` entry below. `perturbed`
 and `base` are two nearly-identical float32 arrays (they differ only by
 one small parameter perturbation), so summing each in float32 and then
 subtracting the two sums hits catastrophic cancellation. Subtracting
@@ -339,7 +339,7 @@ failure (see below), not a bug in the test.
 
 ---
 
-## 2026-08-10 — `tests/test_tesseract_api.py`
+## 2026-08-10 — `tests/test_gradients.py`
 
 **What:** `apply()`-matches-shim-directly, `abstract_eval()`-matches-`apply()`
 shapes, `vector_jacobian_product()`-vs-manual-perturbation (parametrized
@@ -357,7 +357,7 @@ during ad hoc verification, but a real `0 == 0` isn't a meaningful test of
 whether the VJP's *wiring* (right parameter perturbed, right output read,
 right cotangent applied) is correct, since a wiring bug could also
 produce zero by accident. Extended to `n=200`, matching the window
-`tests/test_shim.py`'s own synthetic series already uses and had already
+`tests/test_snow17_shim.py`'s own synthetic series already uses and had already
 confirmed reaches positive temperatures.
 
 **Why `test_vjp_matches_manual_perturbation` reads `base_value` from a
@@ -422,3 +422,177 @@ specifically to catch the `CudnnLstmModel`-style failure mode CLAUDE.md
 names as the cautionary example (an integration that runs without error
 but silently returns zero gradients, which "gradients match" alone
 wouldn't catch if both sides happened to independently return zero).
+
+---
+
+## 2026-08-11 — CLAUDE.md rewrite: SAC-SMA replaces HBV, two Tesseracts required
+
+**What:** user rewrote CLAUDE.md — HBV is now the Aug-20 fallback only;
+SAC-SMA is the primary downstream model, chained Snow17 -> SAC-SMA via
+RAIM, each its own Tesseract (judging criterion 1 requires composing two
+or more). Renamed `tests/test_shim.py` -> `tests/test_snow17_shim.py` and
+`tests/test_tesseract_api.py` -> `tests/test_gradients.py` to match the
+new repo layout CLAUDE.md specifies, fixed all internal references
+(README, docstrings, other notes files) accordingly, and updated
+README/HBV mentions to reflect SAC-SMA as the primary plan rather than
+rewriting history in already-dated log entries above this one.
+
+**Why rename now instead of leaving it for later:** about to add the
+SAC-SMA equivalents (`test_sacsma_shim.py`, and eventually a
+`tesseracts/sacsma/` alongside a differently-scoped `test_gradients.py`).
+Adding new files in the new naming convention while the Snow17 ones
+still used the old names would mean drifting further from CLAUDE.md's
+layout with every commit instead of converging on it.
+
+---
+
+## 2026-08-11 — `external/sac-sma` submodule + archaeology
+
+**What:** vendored `https://github.com/NOAA-OWP/sac-sma`, pinned at
+`975902e3d44785f3b3503f29adfb5755120f5bf`. Read `src/sac/ex_sac1.f90`
+(the `EXSAC` entry point, single-timestep/single-HRU, mirrors
+`EXSNOW19`'s role exactly), `src/sac/sac1.f90` (the physics), and
+`src/sac/sac_data_mod.f90` (the only module either of those `USE`s).
+Confirmed via sac-sma's own `CMakeLists.txt` (`MODEL_SOURCES`) that the
+physics-core build needs exactly these 3 files — smaller and simpler
+than Snow17's 13-file F77 core.
+
+**Why DOUBLE PRECISION, not the default REAL snow17 uses:** read the
+actual type declarations rather than assuming symmetry with the Snow17
+shim — `ex_sac1.f90`/`sac1.f90` declare every real value
+`DOUBLE PRECISION` explicitly (`sac_data_mod.f90`'s `dp =
+SELECTED_REAL_KIND(15, 307)` confirms 8-byte). `fortran/sacsma_shim.f90`
+and `src/sacsma.py` use `c_double`/`float64` throughout — mixing this up
+with Snow17's `c_float`/`float32` convention would be exactly the kind
+of silent argument-association corruption the "never add
+-fdefault-real-8" note on the snow17 shim exists to prevent, just from
+the opposite direction.
+
+**Why state is a flat 6-element array (`UZTWC, UZFWC, LZTWC, LZFSC,
+LZFPC, ADIMC`), not a packed/indexed structure like Snow17's `CS(19)`:**
+`EXSAC` itself passes these as 6 individually-named `INTENT(INOUT)`
+arguments — there's no packed array to unpack/repack, no `NEXLAG`-style
+timestep-dependent indexing. `state_io(6)` in the shim is purely a
+calling-convention choice (uniform with `cs_io` on the Python side, one
+array in/out instead of 6 loose scalars) — the physics itself has no
+`CS`-equivalent bookkeeping to get wrong.
+
+**Why `TMP` is still threaded through the shim/wrapper despite having
+zero effect on output:** confirmed by reading `SAC1`'s body — `TA` (its
+internal name for `TMP`) is only read inside `FROST1`, called only `IF
+(IFRZE .GT. 0)`, and `EXSAC` hardcodes `IFRZE = 0` on every call. Same
+dead-parameter shape as Snow17's `ELEV1`. Kept in the interface anyway
+(rather than dropped) so the signature doesn't need to change if frozen-
+ground support is ever turned on later — cheap to keep, and mirrors
+`EXSAC`'s own argument list exactly, which keeps the Fortran-to-Python
+mapping easy to audit by eye (same reasoning as the snow17 shim's
+1:1-with-`EXSNOW19` design).
+
+**Why `DUAMEL` (unit hydrograph routing) is NOT part of the shim:**
+checked whether the reference driver (`runSac.f90`'s `solve_sac`) calls
+it before assuming routing is needed to get from `EXSAC`'s `TCI` output
+to something loss-comparable — it doesn't. `solve_sac` calls `exsac(...)`
+directly and does its own mass-balance bookkeeping straight off `TCI`.
+`DUAMEL` also isn't in `CMakeLists.txt`'s `MODEL_SOURCES` at all. So
+`TCI` (exposed as `q` in `sacsma_shim.f90`/`src/sacsma.py`) is "runoff"
+for the NSE loss, matching CLAUDE.md's diagram, with no separate routing
+Tesseract needed for v1. Worth a caveat in the eventual writeup: `TCI` is
+unrouted total channel inflow, not timing-lagged to match a USGS gauge
+hydrograph the way `DUAMEL` output would be — a real limitation, not
+hidden, just out of scope for now (CLAUDE.md's own 16-parameter SAC-SMA
+list doesn't include `DUAMEL`'s unit-hydrograph shape parameters either,
+so this reading is consistent with the plan as written, not a unilateral
+scope cut).
+
+---
+
+## 2026-08-11 — `bypass_ratio_check` implicit-SAVE bug: found, proven, patched
+
+**What:** found a live (not dead-code-gated) state-leakage bug in
+`sac1.f90` — full writeup in [NOTES.md](NOTES.md). Fixed via
+`patches/sac1_bypass_ratio_check_save_fix.patch`, applied to a
+build-time-only copy of the file by `fortran/sacsma_build.sh`.
+
+**Why patch a vendored dependency at all, given CLAUDE.md's Apache-2.0
+framing leans on "Snow17 and SAC-SMA are unmodified upstream
+dependencies":** there was no alternative that didn't sacrifice either
+correctness or the whole point of having a fast FD-based Tesseract.
+`bypass_ratio_check` has no argument, `COMMON` block, or module interface
+exposing it — nothing our shim could poke from outside to reset it, the
+way `TPREV` or `CS` could be threaded correctly for Snow17. The only
+other options were: (a) don't fix it and hope basin data / parameter
+search never triggers the precondition -- rejected outright, "hope it
+doesn't trigger" is precisely the silent-wrongness failure mode this
+whole project's testing philosophy exists to rule out, and gradient-based
+parameter search will explore extreme parameter values that a calibrated
+parameter set never would; (b) reload the shared library (or spawn a
+fresh process) before every single `EXSAC` call to force a true reset of
+all static state -- technically addresses it but destroys the performance
+FD-based VJPs depend on (already budgeted at up to ~45 forward runs per
+gradient per CLAUDE.md's cost analysis; per-call process spawns would
+dominate that cost by orders of magnitude). A one-line source patch,
+fully disclosed, applied only to a build-time copy, was the only option
+that fixes the actual defect without either of those costs.
+
+**Why apply the patch to a staged copy (`fortran/_sacsma_patched/`,
+gitignored) instead of committing an edited file into `external/sac-sma`
+directly:** the submodule pin is supposed to answer "which version, with
+which bugs" unambiguously (same reasoning as the original decision to
+vendor via submodule at all, logged above under "Repo skeleton + snow17
+submodule") — editing the submodule's working tree directly would make
+`git submodule status` show a dirty/detached state that doesn't match
+any real upstream commit, and `git submodule update` would silently wipe
+the edit on the next sync. A patch file applied at build time keeps
+`external/sac-sma` byte-identical to the pinned commit *and* keeps the
+fix auditable as its own diffable, reviewable artifact — closer to how a
+Linux distro package patches upstream source than to silently forking it.
+
+**Why the "unmodified dependency" README/NOTICE language needs updating,
+and what it should say instead:** it's simply no longer accurate for
+SAC-SMA. Apache-2.0 explicitly permits modification given attribution
+(that's the license working as intended, not a workaround) — the honest
+framing is "SAC-SMA is vendored unmodified as a pinned submodule; one
+disclosed, minimal, build-time-only patch is applied to fix a confirmed
+upstream defect, documented in `notes/NOTES.md` and
+`patches/sac1_bypass_ratio_check_save_fix.patch`." Updated NOTICE and
+README to say exactly that rather than leave the stronger "unmodified"
+claim standing.
+
+**How the patch itself was generated, and why not hand-written directly
+as a unified diff:** wrote the target fix as a small Python
+find-and-replace against a copy of the real file, then generated the
+patch via `diff -u` against the original -- guarantees byte-exact
+context lines (a hand-written patch's context has to match whitespace
+and line content exactly or `patch` rejects it; got this wrong on the
+first hand-written attempt -- `patch --dry-run` failed on a malformed
+hunk before the second, diff-generated version applied cleanly).
+
+---
+
+## 2026-08-11 — `tests/test_sacsma_shim.py`
+
+**What:** the same three required tests as `test_snow17_shim.py`
+(determinism, state continuity, mass balance -- using `runSac.f90`'s own
+mass-balance formula, read directly from its `derived%mass_balance`
+computation rather than re-derived from scratch), plus a dedicated test
+proving the `bypass_ratio_check` patch fixes the exact scenario in
+NOTES.md through the real compiled shim (not just the standalone repro
+program used to first confirm the bug), plus a reference cross-check
+against ex1's `output.sacbmi.HHWM8I{L,U}.txt`.
+
+**Why the mass-balance test's tolerance is `1e-2 * total_precip` rather
+than something tighter:** checked the reference's own `mass_bal.csv`
+before picking a number rather than guessing -- it shows non-zero
+residuals itself (up to a few tenths of a mm on some days, computed by
+upstream's own driver), so demanding a tighter closure from our shim
+than upstream's own reference achieves would be testing against a
+standard the reference doesn't meet either.
+
+**Why `test_matches_upstream_reference` passing tightly isn't treated as
+"the patch doesn't matter" evidence:** checked directly (see NOTES.md) --
+`UZTWC` never hits exactly `0.0` anywhere in the 46-year HHWM8 state
+trace, so the branch that sets `bypass_ratio_check` never fires for this
+basin at all. A passing cross-check here demonstrates the shim's
+plumbing is correct, not that the bug was inconsequential -- those are
+different claims, and NOTES.md states which one is actually supported by
+the evidence.

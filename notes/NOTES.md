@@ -44,7 +44,7 @@ generated with `TPREV` pinned at `0.0` for all 16,801 timesteps of a
 46-year run, not the previous day's temperature.
 
 **Proof, not assumption:** replaying the same run with `TPREV` pinned at
-`0.0` every step (`tests/test_shim.py::test_snowh_divergence_is_explained_by_upstream_tprev_bug`)
+`0.0` every step (`tests/test_snow17_shim.py::test_snowh_divergence_is_explained_by_upstream_tprev_bug`)
 reproduces the reference `snowh` to float32 precision. That confirms the
 divergence's exact cause rather than leaving it as an unexplained mismatch.
 
@@ -76,7 +76,7 @@ no partial mixing — `FRACS`/`FRACR` are exactly 0 or 1 every timestep).
 Rain (`FRACR` branch) is not rescaled. This matches the physical
 motivation for `SCF` (gauges under-catch wind-blown snow, not rain).
 
-**Where this matters:** `tests/test_shim.py::test_mass_balance` computes
+**Where this matters:** `tests/test_snow17_shim.py::test_mass_balance` computes
 the corrected input per-timestep as `pcp * scf if tmp <= pxtemp else pcp`,
 not a blanket `pcp * scf`. With that correction, mass balance closes to
 float32 precision over a full water year.
@@ -103,3 +103,98 @@ is never actually read in the configuration we use. `snow17_shim.f90`
 still pads to a 12-element array defensively (matches PACK19's declared
 dummy size, costs nothing), per CLAUDE.md's workaround, but this is a
 latent declaration mismatch, not a live silent-corruption bug for us.
+
+---
+
+## SAC-SMA: `bypass_ratio_check` implicit-SAVE bug — live, patched at build time
+
+Upstream: `https://github.com/NOAA-OWP/sac-sma`, vendored as a submodule at
+`external/sac-sma`, pinned to `975902e3d44785f3b3503f29adfb5755120f5bf`.
+
+**What we found:** `src/sac/sac1.f90` declares a local variable with an
+initializer at declaration:
+
+```fortran
+LOGICAL  :: bypass_ratio_check = .FALSE. ! <-- FLAG for GOTO equivalents
+```
+
+Per the Fortran standard, a local variable initialized in its own type
+declaration statement is treated as if it has the `SAVE` attribute —
+its value persists across calls, exactly like a `COMMON` block or module
+variable, even though nothing about the declaration looks like state.
+`bypass_ratio_check` is set to `.TRUE.` inside one branch (when `UZTWC`
+goes negative under high ET demand *and* `UZFWC` can't cover the residual
+demand either) and is never explicitly reset anywhere else in the
+subroutine. It gates whether a free-water-to-tension-water rebalancing
+step runs on every call:
+
+```fortran
+IF (.NOT. bypass_ratio_check) THEN
+    IF ((UZTWC / UZTWM) .LT. (UZFWC / UZFWM)) THEN
+      ... ! transfer water between UZTWC and UZFWC
+    END IF
+END IF
+```
+
+So: any call that hits the rare `UZTWC<0` branch leaves `bypass_ratio_check`
+`.TRUE.` for every subsequent call, until another call happens to re-enter
+that same branch and reset it (via the sibling `IF (UZFWC.GE.RED)` path,
+which sets it back to the default by never touching it — actually reset
+only implicitly by falling into the *other* half of that same IF, which
+never assigns it at all, so once `.TRUE.` it stays `.TRUE.` forever after
+the first trigger, for the lifetime of the process). Every later call that
+doesn't itself re-enter the `UZTWC<0` branch silently skips the rebalancing
+step it should have run.
+
+**Why this matters more than Snow17's ADC/frozen-ground findings:** those
+were dead code, gated behind flags (`IUPWE`/`IUPSC`, `IFRZE`) that are
+always `0` in our usage. This is not gated behind anything — it's live in
+every normal call, and it is exactly the "COMMON-block leakage" failure
+mode CLAUDE.md's context section warns about (silently-wrong FD gradients,
+same shape as the `CudnnLstmModel` cautionary tale). `sac-sma`'s own
+`ioModule.f90` has a comment showing its developers know this exact
+gotcha — *"Use assignment instead of declaration+initialization to avoid
+SAVE attribute gotcha"* — evidently applied there but missed in `sac1.f90`.
+
+**Proof, not assumption:** built a minimal standalone Fortran program
+(`sac_data_mod.f90` + `sac1.f90` + `ex_sac1.f90`, no shim) that (1) calls
+`EXSAC` once with inputs crafted to force `UZTWC<0` and `UZFWC<RED`, then
+(2) calls it again with unrelated "normal" inputs designed so the ratio
+check, if it runs, visibly moves water between `UZTWC`/`UZFWC`. Pre-patch:
+call 2's `UZTWC` came out to `6.48`, differing from the same call run in
+total isolation (`7.74`) — a ~1.26 mm divergence from a single stale
+boolean, for identical inputs, solely because of what happened in a prior,
+unrelated call. `tests/test_sacsma_shim.py::test_bypass_ratio_check_patch_fixes_state_leakage`
+reproduces the same scenario through the actual compiled+patched shim and
+confirms it now matches the isolated/correct value.
+
+**Why we can't fix this from the shim, and had to patch instead:**
+`bypass_ratio_check` is a subroutine-local variable with no argument,
+`COMMON` block, or module interface exposing it — there is no way to
+reset it from outside `sac1.f90` itself, unlike Snow17's `TPREV` (a
+documented state argument we could thread correctly) or `CS` (an explicit
+array). The only real fix is at the source. `patches/sac1_bypass_ratio_check_save_fix.patch`
+moves the initializer to an executable assignment (`bypass_ratio_check =
+.FALSE.` as a statement, run fresh every call) — the same fix pattern
+`ioModule.f90` already uses elsewhere. Applied to a **build-time copy**
+staged under `fortran/_sacsma_patched/` (gitignored); `external/sac-sma`
+itself is never modified, so `git submodule status` stays byte-identical
+to the pinned upstream commit. See `fortran/sacsma_build.sh`.
+
+**Does this affect the ex1 (HHWM8) validation reference?** Checked, not
+assumed: `state/sac_states.HHWM8IL.txt` never records `UZTWC == 0.0` across
+the full 46-year, 16,801-day reference run (`awk` over the state file), so
+the branch that sets `bypass_ratio_check = .TRUE.` never fires for this
+basin's forcing/parameters at all. That's why
+`test_matches_upstream_reference` passes tightly against the (unpatched)
+upstream reference — it's not evidence the bug is harmless, just that this
+particular basin/parameter combination happens not to trigger its
+precondition. The bug is a real risk for other basins (naturally arid,
+high-PET/low-storage) and, more importantly, for gradient-based parameter
+search itself, which will explore parameter combinations (including bad
+or extreme ones, especially early in training) that a hand-picked
+calibrated parameter set like this one's would never reach.
+
+**Upstream reporting:** worth filing, in prose (per CLAUDE.md's
+CONTRIBUTING caveat — describe the bug, quote the offending line, don't
+paste our patch or any other project code). Not yet filed.

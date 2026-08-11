@@ -85,7 +85,7 @@ class Snow17Params:
 
 @dataclass
 class Snow17Output:
-    raim: np.ndarray   # mm/day, rain-plus-melt -> feeds HBV
+    raim: np.ndarray   # mm/day, rain-plus-melt -> feeds SAC-SMA (or HBV, fallback-only per CLAUDE.md)
     sneqv: np.ndarray  # m, SWE
     snowh: np.ndarray  # m, snow depth
     cs: np.ndarray     # final carryover state, shape (CS_SIZE,)

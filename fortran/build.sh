@@ -11,7 +11,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 FLAGS="-shared -fPIC -O2"
-if [[ "${SNOW17_BOUNDS_CHECK:-0} " == "1 " ]]; then
+if [[ "${BOUNDS_CHECK:-0} " == "1 " ]]; then
   FLAGS="$FLAGS -fcheck=bounds"
 fi
 

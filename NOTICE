@@ -1,17 +1,30 @@
 dsnow17-hbv
 Copyright 2026 Kamlesh Sawadekar
 
-This product includes software adapted from Snow-17 (NOAA Office of
-Water Prediction), licensed under the Apache License, Version 2.0.
+This product includes software adapted from Snow-17 and SAC-SMA (both
+NOAA Office of Water Prediction / NOAA-OWP), licensed under the Apache
+License, Version 2.0.
 
     https://github.com/NOAA-OWP/snow17
+    https://github.com/NOAA-OWP/sac-sma
 
-fortran/snow17_shim.f90 links directly against the unmodified FORTRAN-77
-physics files in external/snow17/src/snow19/ (vendored as a git submodule,
-pinned to a specific commit -- see external/snow17's own commit hash for
-the exact version and its known issues). No changes were made to any
-snow19/ source file; the shim only adds a bind(C) driver loop around
-EXSNOW19.
+Snow-17: fortran/snow17_shim.f90 links directly against the unmodified
+FORTRAN-77 physics files in external/snow17/src/snow19/ (vendored as a
+git submodule, pinned to a specific commit -- see external/snow17's own
+commit hash for the exact version and its known issues). No changes were
+made to any snow19/ source file; the shim only adds a bind(C) driver loop
+around EXSNOW19.
 
-See https://github.com/NOAA-OWP/snow17/blob/main/LICENSE for the full
-upstream license text.
+SAC-SMA: fortran/sacsma_shim.f90 links against external/sac-sma/src/sac/
+(vendored as a git submodule, pinned to a specific commit). One disclosed,
+minimal patch is applied to a build-time-only copy of src/sac/sac1.f90 --
+see patches/sac1_bypass_ratio_check_save_fix.patch and notes/NOTES.md for
+the confirmed upstream defect it fixes (a local variable's Fortran-
+mandated implicit SAVE attribute causing state to silently leak between
+calls). external/sac-sma itself is never modified; `git submodule status`
+stays byte-identical to the pinned upstream commit. The shim otherwise
+only adds a bind(C) driver loop around EXSAC.
+
+See https://github.com/NOAA-OWP/snow17/blob/main/LICENSE and
+https://github.com/NOAA-OWP/sac-sma/blob/main/LICENSE for the full
+upstream license texts (both Apache-2.0).

@@ -1,0 +1,16 @@
+--- src/sac/sac1.f90	2026-08-11 03:23:06.650126270 -0400
++++ src/sac/sac1.f90	2026-08-11 03:23:14.465140658 -0400
+@@ -60,7 +60,12 @@
+   DOUBLE PRECISION :: HPL, RATLP, RATLS, FRACP, PERCP, PERCS, EXCESS, SUR, EUSED, TBF, BFCC, E4
+   DOUBLE PRECISION :: FRACP_DENOM
+   INTEGER  :: I, NINC
+-  LOGICAL  :: bypass_ratio_check = .FALSE. ! <-- FLAG for GOTO equivalents
++  LOGICAL  :: bypass_ratio_check ! <-- FLAG for GOTO equivalents
++
++  ! dsnow17-hbv patch: initializing a local at declaration gives it an
++  ! implicit SAVE (Fortran standard), so it silently persisted .TRUE.
++  ! across calls. Reset explicitly every call instead. See notes/NOTES.md.
++  bypass_ratio_check = .FALSE.
+ 
+ !    ----- VARIABLES -----
+ !    IFRZE    Frozen ground module switch.  0 = No frozen ground module,

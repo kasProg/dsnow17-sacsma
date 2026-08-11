@@ -9,12 +9,15 @@ env:
 
 build:
 	./fortran/build.sh
+	./fortran/sacsma_build.sh
 
 build-checked:
-	SNOW17_BOUNDS_CHECK=1 ./fortran/build.sh
+	BOUNDS_CHECK=1 ./fortran/build.sh
+	BOUNDS_CHECK=1 ./fortran/sacsma_build.sh
 
 test: env build
 	.venv/bin/python -m pytest tests/ -v
 
 clean:
 	rm -f fortran/*.so fortran/*.o *.mod
+	rm -rf fortran/_sacsma_patched

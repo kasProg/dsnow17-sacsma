@@ -3,7 +3,7 @@
 Two things this file exists to prove, per CLAUDE.md's Day 3-4 milestone:
 
 1. apply() runs and its outputs match the same-inputs shim call directly
-   (tests/test_shim.py already exhaustively validates the shim itself --
+   (tests/test_snow17_shim.py already exhaustively validates the shim itself --
    this just proves the Tesseract wrapper doesn't corrupt anything in
    translation).
 2. vector_jacobian_product() matches an independent manual perturbation
