@@ -1049,3 +1049,107 @@ default Adam lr, no learning-rate schedule, no regularization sweep) --
 that's legitimate further work (CLAUDE.md's Day 11-14 is figures/writeup,
 not more model development, so this may be close to final scope), not a
 claim that this is a finished, optimized result.
+
+---
+
+## 2026-08-11 — LSTM upgrade + Hargreaves PET: licensing boundary, and a better result
+
+**What:** user asked to look at MHPI's `dPLHBVrelease` for LSTM design
+ideas, switch PET from Hamon to Hargreaves, and build "a better LSTM."
+Result: `src/paramnet.py`'s MLP became an LSTM-encoder-plus-MLP-head
+(12-month climatology -> LSTM -> concat with static attrs -> bounded
+parameter head), PET switched to Hargreaves-Samani, cached to disk. Real
+result improved over the prior MLP+Hamon run: train NSE
+`-1.62 -> +0.50` became `-0.05 -> +0.62`; held-out NSE `-0.46 -> +0.54`
+became `+0.23 -> +0.58` -- notably, the LSTM+Hargreaves run also starts
+near NSE 0 instead of deeply negative, suggesting the richer climate
+context gives sensible parameter guesses even before training moves
+anything.
+
+**Why `dPLHBVrelease` itself was never fetched, only its license
+checked:** confirmed directly (fetched the raw LICENSE file) that it's
+PSU Non-Commercial -- "You may not use Software for commercial purposes
+without prior written consent from PSU" -- the exact restriction
+CLAUDE.md already flags for `generic_deltamodel`/`hydrodl2` (same MHPI
+lineage; the repo even contains a `hydroDL-dev/` directory, confirming
+it's the same codebase family, not a coincidentally-similar name).
+"Learn from it, don't copy" is fine copyright-wise for general
+architectural ideas (an LSTM predicting physical-model parameters from
+basin attributes is well-documented published science, not a copyrightable
+expression unique to one repo), but reading actual source under a
+restrictive license and then writing "your own" version raises the real
+risk of unconsciously mirroring structure/naming/logic closely enough to
+complicate the "original work" claim this submission's Apache-2.0
+license depends on. Decided not to fetch any of its files at all, out of
+that caution -- not because the user's request was improper, but because
+there was a strictly safer way to get the same design benefit.
+
+**Why NeuralHydrology instead, and why it's not just a legal
+workaround:** checked its license directly too (BSD-3-Clause, genuinely
+permissive) before treating it as a safe reference. It's also arguably
+the *better* reference regardless of licensing -- the most actively
+maintained, widely-cited LSTM rainfall-runoff framework in this exact
+research area (Kratzert et al.'s foundational work), not a fallback
+chosen only because the first option was off-limits.
+
+**Why the LSTM's output stays a static (not time-varying) parameter
+vector, despite now having a genuine sequence model in the loop:** this
+is a hard constraint from `src/coupling.py`'s whole design, not an
+oversight. A time-varying-parameter output would mean SAC-SMA's Tesseract
+receiving a different parameter value per timestep, which reintroduces
+exactly the "one FD run per RAIM timestep" cost explosion `coupling.py`
+was built specifically to avoid (see that module's docstring and the
+original coupling-design log entry above). The LSTM's role here is
+narrower and compatible with that constraint: encode a *richer input
+representation* (actual monthly seasonal patterns, not just pre-computed
+summary statistics like `p_mean`/`aridity`) into a fixed-size embedding,
+concatenated with static attributes, feeding the same kind of bounded
+static-parameter head the MLP version used. More expressive input,
+identical output contract.
+
+**Why monthly climatology (12 steps) rather than the raw daily training
+window (1095 steps) as the LSTM's input:** two reasons. First, cost is
+irrelevant here specifically because the LSTM itself is ordinary native
+PyTorch autograd (cheap, fast) -- the actual expensive part of every
+epoch is the Fortran/Tesseract calls, unaffected by the LSTM's own
+sequence length. Second, with only 35 training basins, a 12-step
+climatological summary is a more robust signal than a 1095-step raw
+daily series for a model this data-limited -- less surface area to
+overfit noise in, and it's computed from each basin's FULL available
+record (up to 35 years, not just the 3-year training window), so it's
+also seeing more climatological history than the differentiable rollout
+itself ever touches.
+
+**Why PET is now precomputed and cached to
+`data/camels/pet/{gauge_id}_pet.csv` instead of recomputed inline every
+load:** user request, and a real improvement independent of that --
+`camels_loader.load_basin_timeseries()` previously recomputed Hargreaves
+PET from scratch on every call (cheap individually, but redundant across
+the multiple places a basin's data gets loaded -- once for the training
+window, once for climatology). `data/build_pet.py` now precomputes it
+explicitly for every selected basin up front; `camels_loader.get_pet()`
+still falls back to computing+caching on first access if a basin's cache
+is missing, so the pipeline doesn't silently break if a step is skipped,
+but the intended flow is cache-first. Plain CSV (date, pet), not a binary
+format -- specifically so the values are inspectable on their own, not
+just an implementation detail buried inside a training run (verified:
+`data/camels/pet/11264500_pet.csv` reads back byte-identical to what
+gets computed fresh, confirming the cache is correct, not just fast).
+
+**Hargreaves-Samani formula, verified against an authoritative source
+before trusting it (same discipline as the Hamon verification earlier):**
+`ETo = 0.0023 * (Tmean + 17.8) * sqrt(Tmax - Tmin) * 0.408 * Ra`, with
+`Ra` (extraterrestrial radiation) via the full FAO-56 (Allen et al. 1998)
+procedure -- solar declination, sunset hour angle, inverse
+relative-distance Earth-Sun. Cross-checked against PyETo (MIT-licensed
+FAO-56 reference implementation; formula/constants only, no code
+reused) and sanity-checked numerically before trusting it: `et_rad()`
+at 40N gives Ra ranging ~13.5 MJ/m^2/day in deep winter to ~41.9 at
+summer solstice, matching the expected mid-latitude seasonal curve
+shape. Hargreaves PET came out roughly 2x Hamon's for the same basin
+(e.g. 1.88 vs 0.92 mm/day mean, one basin checked directly) --
+expected, not a bug: different temperature-only PET methods are known to
+differ by this much depending on climate/elevation, particularly at the
+high-elevation sites this project's basin selection is full of (high
+clear-sky radiation drives Hargreaves' Ra term up more than Hamon's
+day-length-only approach accounts for).

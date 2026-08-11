@@ -14,13 +14,26 @@ sys.path.insert(0, str(REPO_ROOT / "src"))
 
 from paramnet import SACSMA_BOUNDS, SNOW17_BOUNDS, ParamNet  # noqa: E402
 
-N_FEATURES = 39
+N_STATIC = 39
+N_CLIMATE = 3
+N_MONTHS = 12
+
+
+def _make_net() -> ParamNet:
+    return ParamNet(n_static_features=N_STATIC, n_climate_features=N_CLIMATE)
+
+
+def _make_inputs(batch: int, seed: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
+    rng = np.random.default_rng(seed)
+    x_static = torch.tensor(rng.normal(0, 1, (batch, N_STATIC)), dtype=torch.float64)
+    x_climate = torch.tensor(rng.normal(0, 1, (batch, N_MONTHS, N_CLIMATE)), dtype=torch.float64)
+    return x_static, x_climate
 
 
 def test_output_shapes_and_dtypes():
-    net = ParamNet(n_features=N_FEATURES)
-    x = torch.randn(5, N_FEATURES, dtype=torch.float64)
-    theta_A, theta_B = net(x)
+    net = _make_net()
+    x_static, x_climate = _make_inputs(5)
+    theta_A, theta_B = net(x_static, x_climate)
 
     assert theta_A.shape == (5, 11)
     assert theta_B.shape == (5, 16)
@@ -39,18 +52,15 @@ def test_outputs_always_respect_parameter_bounds():
     -- this is what prevents the NaN-blowup failure mode
     tests/test_pipeline_hhwm8.py hit with unconstrained direct
     optimization (see that file's docstring)."""
-    net = ParamNet(n_features=N_FEATURES)
+    net = _make_net()
     # A wide spread of inputs, including extreme values -- the bound
     # guarantee must hold regardless of how extreme the raw network
     # output gets, not just for "reasonable" inputs.
-    x = torch.tensor(
-        np.concatenate([
-            np.random.default_rng(0).normal(0, 1, (20, N_FEATURES)),
-            np.random.default_rng(1).normal(0, 50, (20, N_FEATURES)),
-        ]),
-        dtype=torch.float64,
-    )
-    theta_A, theta_B = net(x)
+    x_static_1, x_climate_1 = _make_inputs(20, seed=0)
+    x_static_2, x_climate_2 = _make_inputs(20, seed=1)
+    x_static = torch.cat([x_static_1, x_static_2 * 50])
+    x_climate = torch.cat([x_climate_1, x_climate_2 * 50])
+    theta_A, theta_B = net(x_static, x_climate)
 
     for i, name in enumerate(net.snow17_names):
         lo, hi = SNOW17_BOUNDS[name]
@@ -64,16 +74,16 @@ def test_outputs_always_respect_parameter_bounds():
 
 
 def test_gradient_flows_to_every_network_parameter():
-    net = ParamNet(n_features=N_FEATURES)
-    x = torch.randn(3, N_FEATURES, dtype=torch.float64)
-    theta_A, theta_B = net(x)
+    net = _make_net()
+    x_static, x_climate = _make_inputs(3)
+    theta_A, theta_B = net(x_static, x_climate)
     loss = theta_A.sum() + theta_B.sum()
     loss.backward()
 
     params_with_grad = [p for p in net.parameters() if p.grad is not None]
     assert len(params_with_grad) == len(list(net.parameters())), (
-        "some network parameter never received a gradient -- a layer is "
-        "disconnected from the output"
+        "some network parameter never received a gradient -- a layer "
+        "(e.g. the LSTM or the head) is disconnected from the output"
     )
     assert all(torch.all(torch.isfinite(p.grad)) for p in params_with_grad)
     assert any(p.grad.abs().sum() > 0 for p in params_with_grad), (

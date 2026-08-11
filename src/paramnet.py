@@ -1,23 +1,48 @@
-"""MLP predicting Snow17 + SAC-SMA parameters from static basin
-attributes -- CLAUDE.md's Day 7-10 milestone.
+"""LSTM-encoder + MLP head predicting Snow17 + SAC-SMA parameters from
+basin static attributes AND a monthly climatology sequence.
+CLAUDE.md's Day 7-10 milestone.
 
-Input: 39 z-score-normalized CAMELS attributes (data/build_attributes.py).
-Output: 11 Snow17 parameters + 16 SAC-SMA parameters, each mapped into
-its own physically valid range via a per-parameter bounded sigmoid (see
-PARAM_BOUNDS below) -- never left as raw unconstrained network output.
-tests/test_pipeline_hhwm8.py already demonstrated what unconstrained
-direct optimization does to parameters spanning wildly different scales
-(SI ~1500 next to MBASE ~0): one bad step and the Fortran call gets fed
-a value it can't handle. Bounding at the network's own output layer
-prevents that structurally, for every training step, not just for a
-manually-tuned learning rate on one basin.
+Two inputs:
+  x_static:  (batch, 39) z-score-normalized CAMELS static attributes
+             (data/build_attributes.py) -- climate indices, topography,
+             soil, vegetation, geology.
+  x_climate: (batch, 12, 3) z-score-normalized monthly climatology
+             (data/build_climatology.py) -- mean [prcp, tmean, pet] per
+             calendar month, from each basin's full available record.
 
-MLP, not LSTM: CLAUDE.md's own pipeline diagram labels this
-"[ LSTM / MLP ]" -- undecided in the planning doc. The input here is
-purely static per-basin attributes with no time dimension, so there's
-nothing for an LSTM to be recurrent over. MLP is the architecturally
-correct choice given the actual input/output shapes, not a stylistic
-pick between two equally-valid options.
+An LSTM encodes x_climate into a learned seasonal-pattern embedding
+(its final hidden state), concatenated with x_static, then a small MLP
+head maps the combination to all 27 parameters. Parameters stay STATIC
+per rollout (one value per basin per training window) -- a hard
+constraint from this project's FD-gradient-cost design (a genuinely
+time-varying-parameter output would reintroduce the "one FD run per
+RAIM timestep" cost src/coupling.py exists specifically to avoid, see
+notes/NOTES.md). What the LSTM buys instead: richer input signal than
+static summary attributes alone -- actual monthly seasonal patterns in
+precipitation/temperature/PET -- while the output stays a compact,
+FD-tractable parameter vector.
+
+Output: each of the 27 parameters is mapped into its own physically
+valid range via a bounded sigmoid (see *_BOUNDS below) -- never left as
+raw unconstrained network output. tests/test_pipeline_hhwm8.py already
+demonstrated what unconstrained direct optimization does to parameters
+spanning wildly different scales (SI ~1500 next to MBASE ~0): one bad
+step and the Fortran call gets fed a value it can't handle. Bounding at
+the network's own output layer prevents that structurally, for every
+training step, not dependent on a manually-tuned learning rate.
+
+Methodological lineage, not code: this LSTM-encoder-plus-physical-model
+pattern follows the general differentiable-parameter-learning approach
+described in Feng et al. (2022, WRR) and the broader MHPI dPL line of
+work, and the architecture patterns here were informed by studying
+NeuralHydrology (Kratzert et al., github.com/neuralhydrology/neuralhydrology,
+BSD-3-Clause) -- NOT MHPI's own dPLHBVrelease/generic_deltamodel/hydrodl2,
+which are PSU Non-Commercial licensed and incompatible with this
+project's Apache-2.0 submission (CLAUDE.md's existing hard constraint;
+their source was deliberately not read while building this file, only
+cited as prior work). No code from either source is copied here; this
+is an original implementation of a well-documented, published modeling
+pattern.
 """
 
 from __future__ import annotations
@@ -74,17 +99,18 @@ SACSMA_BOUNDS: dict[str, tuple[float, float]] = {
 
 
 class ParamNet(nn.Module):
-    """x: (batch, n_features) z-score-normalized basin attributes.
-    forward(x) -> (theta_A, theta_B): (batch, 11) float32, (batch, 16)
-    float64 -- dtypes match what src/pipeline.py's CoupledNWSStack.run()
-    (and src/coupling.py's per-leaf dtype handling) expect for Snow17
-    vs. SAC-SMA respectively.
+    """forward(x_static, x_climate) -> (theta_A, theta_B):
+    (batch, 11) float32, (batch, 16) float64 -- dtypes match what
+    src/pipeline.py's CoupledNWSStack.run() (and src/coupling.py's
+    per-leaf dtype handling) expect for Snow17 vs. SAC-SMA respectively.
     """
 
     def __init__(
         self,
-        n_features: int,
-        hidden: int = 64,
+        n_static_features: int,
+        n_climate_features: int = 3,
+        lstm_hidden: int = 32,
+        mlp_hidden: int = 64,
         n_hidden_layers: int = 2,
         dropout: float = 0.1,
     ) -> None:
@@ -106,20 +132,30 @@ class ParamNet(nn.Module):
         self.register_buffer("sacsma_lo", sacsma_bounds[:, 0])
         self.register_buffer("sacsma_hi", sacsma_bounds[:, 1])
 
+        self.lstm = nn.LSTM(
+            input_size=n_climate_features, hidden_size=lstm_hidden, batch_first=True
+        ).double()
+
         n_out = len(self.snow17_names) + len(self.sacsma_names)
         layers: list[nn.Module] = []
-        in_dim = n_features
+        in_dim = n_static_features + lstm_hidden
         for _ in range(n_hidden_layers):
-            layers += [nn.Linear(in_dim, hidden), nn.ReLU(), nn.Dropout(dropout)]
-            in_dim = hidden
+            layers += [nn.Linear(in_dim, mlp_hidden), nn.ReLU(), nn.Dropout(dropout)]
+            in_dim = mlp_hidden
         layers += [nn.Linear(in_dim, n_out)]
-        self.net = nn.Sequential(*layers).double()
+        self.head = nn.Sequential(*layers).double()
 
-    def forward(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        raw = self.net(x.to(torch.float64))
+    def forward(
+        self, x_static: torch.Tensor, x_climate: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        _, (h_n, _c_n) = self.lstm(x_climate.to(torch.float64))
+        climate_embed = h_n[-1]  # (batch, lstm_hidden) -- final layer's final hidden state
+
+        combined = torch.cat([x_static.to(torch.float64), climate_embed], dim=-1)
+        raw = self.head(combined)
+
         n_a = len(self.snow17_names)
         raw_a, raw_b = raw[..., :n_a], raw[..., n_a:]
-
         frac_a = torch.sigmoid(raw_a)
         frac_b = torch.sigmoid(raw_b)
         theta_A = (self.snow17_lo + frac_a * (self.snow17_hi - self.snow17_lo)).to(torch.float32)

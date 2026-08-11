@@ -27,6 +27,7 @@ CAMELS_DIR = REPO_ROOT / "data" / "camels"
 _DATA_AVAILABLE = (
     (CAMELS_DIR / "selected_basins.csv").exists()
     and (CAMELS_DIR / "basin_attributes.npz").exists()
+    and (CAMELS_DIR / "basin_climatology.npz").exists()
     and (CAMELS_DIR / "basin_dataset_public_v1p2").exists()
 )
 
@@ -34,28 +35,31 @@ _DATA_AVAILABLE = (
 @pytest.mark.skipif(
     not _DATA_AVAILABLE,
     reason="CAMELS data not downloaded -- run data/download_camels.sh, "
-    "data/select_basins.py, data/build_attributes.py first",
+    "data/select_basins.py, data/build_attributes.py, data/build_climatology.py first",
 )
 def test_training_loop_runs_and_loss_improves():
     import torch
 
     import train
 
-    selected, X = train.load_basins()
+    selected, X_static, X_climate = train.load_basins()
     train_ids = selected.loc[selected["split"] == "train", "gauge_id"].tolist()[:3]
     heldout_ids = selected.loc[selected["split"] == "heldout", "gauge_id"].tolist()[:2]
 
     train_basins = [train.BasinExample(g) for g in train_ids]
     heldout_basins = [train.BasinExample(g) for g in heldout_ids]
 
-    net = train.ParamNet(n_features=X[train_ids[0]].shape[0])
+    net = train.ParamNet(
+        n_static_features=X_static[train_ids[0]].shape[0],
+        n_climate_features=X_climate[train_ids[0]].shape[1],
+    )
     stack = train.CoupledNWSStack()
     optimizer = torch.optim.Adam(net.parameters(), lr=3e-3)
 
-    nse_before = train.run_epoch(net, stack, train_basins, X, optimizer=None)
+    nse_before = train.run_epoch(net, stack, train_basins, X_static, X_climate, optimizer=None)
     for _ in range(3):
-        train.run_epoch(net, stack, train_basins, X, optimizer)
-    nse_after = train.run_epoch(net, stack, train_basins, X, optimizer=None)
+        train.run_epoch(net, stack, train_basins, X_static, X_climate, optimizer)
+    nse_after = train.run_epoch(net, stack, train_basins, X_static, X_climate, optimizer=None)
 
     mean_before = np.mean(list(nse_before.values()))
     mean_after = np.mean(list(nse_after.values()))
@@ -63,5 +67,5 @@ def test_training_loop_runs_and_loss_improves():
         f"mean train NSE did not improve over 3 epochs: {mean_before:.4f} -> {mean_after:.4f}"
     )
 
-    heldout_nses = train.run_epoch(net, stack, heldout_basins, X, optimizer=None)
+    heldout_nses = train.run_epoch(net, stack, heldout_basins, X_static, X_climate, optimizer=None)
     assert all(np.isfinite(v) for v in heldout_nses.values())

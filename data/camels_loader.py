@@ -35,6 +35,7 @@ import pandas as pd
 
 CAMELS_DIR = Path(__file__).resolve().parent / "camels"
 DATASET_DIR = CAMELS_DIR / "basin_dataset_public_v1p2"
+PET_CACHE_DIR = CAMELS_DIR / "pet"
 
 CFS_TO_MM_PER_DAY_PER_KM2 = 2.446575  # see module docstring derivation in notes/logs.md
 
@@ -42,15 +43,66 @@ CFS_TO_MM_PER_DAY_PER_KM2 = 2.446575  # see module docstring derivation in notes
 # (authoritative, unambiguous source for the exact constants -- several
 # variants with different-looking constants circulate in the literature,
 # all algebraically equivalent once you track units through consistently).
+# Kept for reference/comparison; load_basin_timeseries() now uses
+# hargreaves_pet() instead -- see that function's docstring for why.
 _HAMON_C = 0.1651  # mm/day per g/m^3, at N=12hr daylight
 
+# Hargreaves-Samani (1985) constants and the FAO-56 (Allen et al. 1998)
+# extraterrestrial-radiation procedure it needs, verified against
+# PyETo's implementation (MIT-licensed FAO-56 reference library --
+# formula/constants only, no code copied) since several
+# differently-scaled-looking variants of "Hargreaves" circulate in the
+# literature and it's easy to mix conventions across two sources. See
+# notes/logs.md for the verification and a sanity-check value.
+_SOLAR_CONSTANT = 0.0820  # MJ / m^2 / min
 
-def _find_file(subdir: Path, gauge_id: str, suffix_glob: str) -> Path:
-    matches = list(subdir.glob(f"*/{gauge_id}{suffix_glob}"))
-    if not matches:
-        raise FileNotFoundError(f"No file matching {gauge_id}{suffix_glob} under {subdir}")
-    assert len(matches) == 1, f"multiple matches for {gauge_id}: {matches}"
-    return matches[0]
+
+def _sol_dec(day_of_year: np.ndarray) -> np.ndarray:
+    """Solar declination, radians. FAO-56 eq. 24."""
+    return 0.409 * np.sin(2 * np.pi / 365 * day_of_year - 1.39)
+
+
+def _sunset_hour_angle(lat_rad: float, sol_dec: np.ndarray) -> np.ndarray:
+    """FAO-56 eq. 25. Clamped to [-1, 1] before arccos -- polar-latitude
+    edge case, not expected for CONUS basins, guarded anyway."""
+    x = np.clip(-np.tan(lat_rad) * np.tan(sol_dec), -1.0, 1.0)
+    return np.arccos(x)
+
+
+def _inv_rel_dist_earth_sun(day_of_year: np.ndarray) -> np.ndarray:
+    """FAO-56 eq. 23."""
+    return 1 + 0.033 * np.cos(2 * np.pi / 365 * day_of_year)
+
+
+def et_rad(lat_deg: float, day_of_year: np.ndarray) -> np.ndarray:
+    """Extraterrestrial radiation Ra, MJ/m^2/day. FAO-56 eq. 21."""
+    lat_rad = np.deg2rad(lat_deg)
+    dr = _inv_rel_dist_earth_sun(day_of_year)
+    delta = _sol_dec(day_of_year)
+    ws = _sunset_hour_angle(lat_rad, delta)
+    return (
+        (1440.0 / np.pi) * _SOLAR_CONSTANT * dr
+        * (ws * np.sin(lat_rad) * np.sin(delta) + np.cos(lat_rad) * np.cos(delta) * np.sin(ws))
+    )
+
+
+def hargreaves_pet(
+    tmax_c: np.ndarray, tmin_c: np.ndarray, lat_deg: float, day_of_year: np.ndarray
+) -> np.ndarray:
+    """Daily PET (mm/day) via Hargreaves & Samani (1985), FAO-56 form:
+    ETo = 0.0023 * (Tmean + 17.8) * sqrt(Tmax - Tmin) * 0.408 * Ra
+    (the 0.408 factor converts Ra from MJ/m^2/day to mm/day-equivalent).
+    Needs only temperature + latitude/day-of-year (via Ra) -- no
+    measured radiation/humidity/wind, same "temperature-only" data
+    profile as Hamon, but generally regarded as more accurate (it's the
+    FAO's own recommended fallback when full Penman-Monteith inputs
+    aren't available). tmax_c/tmin_c: deg C. day_of_year: 1-366.
+    """
+    t_mean = (tmax_c + tmin_c) / 2.0
+    ra = et_rad(lat_deg, day_of_year)
+    trange = np.maximum(tmax_c - tmin_c, 0.0)  # guard against a bad tmax<tmin day
+    pet = 0.0023 * (t_mean + 17.8) * np.sqrt(trange) * 0.408 * ra
+    return np.maximum(pet, 0.0)
 
 
 def hamon_pet(tmax_c: np.ndarray, tmin_c: np.ndarray, dayl_s: np.ndarray) -> np.ndarray:
@@ -64,6 +116,14 @@ def hamon_pet(tmax_c: np.ndarray, tmin_c: np.ndarray, dayl_s: np.ndarray) -> np.
     p_t = 216.7 * e_s_mb / (t_mean + 273.3)  # saturation vapor density, g/m^3
     pet = _HAMON_C * (n_hours / 12.0) * p_t
     return np.maximum(pet, 0.0)  # guard against a pathological negative from extreme T
+
+
+def _find_file(subdir: Path, gauge_id: str, suffix_glob: str) -> Path:
+    matches = list(subdir.glob(f"*/{gauge_id}{suffix_glob}"))
+    if not matches:
+        raise FileNotFoundError(f"No file matching {gauge_id}{suffix_glob} under {subdir}")
+    assert len(matches) == 1, f"multiple matches for {gauge_id}: {matches}"
+    return matches[0]
 
 
 @dataclass
@@ -80,7 +140,11 @@ class BasinTimeseries:
     area_km2: float
 
 
-def load_basin_timeseries(gauge_id: str) -> BasinTimeseries:
+def _load_raw_forcing(gauge_id: str) -> tuple[pd.Series, np.ndarray, np.ndarray, np.ndarray, float, float, float]:
+    """(dates, prcp, tmax, tmin, lat, elev, area_km2) -- forcing only, no
+    PET, no streamflow. Split out from load_basin_timeseries() so PET
+    caching (get_pet(), below) can depend on just this, not the
+    streamflow merge."""
     forcing_path = _find_file(
         DATASET_DIR / "basin_mean_forcing" / "daymet", gauge_id, "_lump_cida_forcing_leap.txt"
     )
@@ -95,11 +159,40 @@ def load_basin_timeseries(gauge_id: str) -> BasinTimeseries:
     prcp = forcing["prcp(mm/day)"].to_numpy(dtype=np.float64)
     tmax = forcing["tmax(C)"].to_numpy(dtype=np.float64)
     tmin = forcing["tmin(C)"].to_numpy(dtype=np.float64)
-    dayl = forcing["dayl(s)"].to_numpy(dtype=np.float64)
-    tmean = (tmax + tmin) / 2.0
-    pet = hamon_pet(tmax, tmin, dayl)
-
     area_km2 = area_m2 / 1e6
+    return dates, prcp, tmax, tmin, lat, elev, area_km2
+
+
+def get_pet(gauge_id: str, dates: pd.Series, tmax: np.ndarray, tmin: np.ndarray, lat: float) -> np.ndarray:
+    """Hargreaves PET for one basin's full record, cached to
+    data/camels/pet/{gauge_id}_pet.csv (date, pet_mm_day -- plain CSV,
+    not a binary format, specifically so the values are inspectable, not
+    just an implementation detail buried inside a training run). Computed
+    fresh and written on first access if the cache file doesn't exist yet;
+    data/build_pet.py precomputes it for every selected basin up front so
+    a training run reads from cache rather than triggering computation
+    implicitly the first time a basin is touched."""
+    cache_path = PET_CACHE_DIR / f"{gauge_id}_pet.csv"
+    if cache_path.exists():
+        cached = pd.read_csv(cache_path, parse_dates=["date"])
+        if len(cached) == len(dates) and (cached["date"].to_numpy() == pd.DatetimeIndex(dates).to_numpy()).all():
+            return cached["pet"].to_numpy(dtype=np.float64)
+        # Cache exists but doesn't match this basin's current date range
+        # (e.g. re-extracted data) -- fall through and recompute/overwrite
+        # rather than silently returning a mismatched series.
+
+    day_of_year = dates.dt.dayofyear.to_numpy()
+    pet = hargreaves_pet(tmax, tmin, lat, day_of_year)
+
+    PET_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    pd.DataFrame({"date": pd.DatetimeIndex(dates), "pet": pet}).to_csv(cache_path, index=False)
+    return pet
+
+
+def load_basin_timeseries(gauge_id: str) -> BasinTimeseries:
+    dates, prcp, tmax, tmin, lat, elev, area_km2 = _load_raw_forcing(gauge_id)
+    tmean = (tmax + tmin) / 2.0
+    pet = get_pet(gauge_id, dates, tmax, tmin, lat)
 
     flow_path = _find_file(DATASET_DIR / "usgs_streamflow", gauge_id, "_streamflow_qc.txt")
     flow = pd.read_csv(

@@ -94,33 +94,45 @@ def nse_value(sim: torch.Tensor, example: BasinExample) -> float:
         return float(1.0 - masked_nse_loss(sim, example).item())
 
 
-def load_basins() -> tuple[pd.DataFrame, dict]:
+def load_basins() -> tuple[pd.DataFrame, dict, dict]:
+    """Returns (selected_basins_df, static_attrs_by_gauge_id,
+    climatology_by_gauge_id)."""
     selected = pd.read_csv(CAMELS_DIR / "selected_basins.csv", dtype={"gauge_id": str})
     attrs = np.load(CAMELS_DIR / "basin_attributes.npz", allow_pickle=True)
     gauge_ids = list(attrs["gauge_ids"])
-    X = {gid: attrs["X"][i] for i, gid in enumerate(gauge_ids)}
-    return selected, X
+    X_static = {gid: attrs["X"][i] for i, gid in enumerate(gauge_ids)}
+
+    clim = np.load(CAMELS_DIR / "basin_climatology.npz", allow_pickle=True)
+    clim_ids = list(clim["gauge_ids"])
+    X_climate = {gid: clim["X"][i] for i, gid in enumerate(clim_ids)}
+    assert set(X_static) == set(X_climate), "static/climatology basin sets don't match"
+
+    return selected, X_static, X_climate
 
 
 def run_epoch(
     net: ParamNet,
     stack: CoupledNWSStack,
     basins: list[BasinExample],
-    X: dict,
+    X_static: dict,
+    X_climate: dict,
     optimizer: torch.optim.Optimizer | None,
 ) -> dict[str, float]:
     """optimizer=None -> eval mode, no gradient step (used for held-out
     basins). Returns {gauge_id: nse}."""
-    x_batch = torch.tensor(
-        np.stack([X[b.gauge_id] for b in basins]), dtype=torch.float64
+    x_static_batch = torch.tensor(
+        np.stack([X_static[b.gauge_id] for b in basins]), dtype=torch.float64
+    )
+    x_climate_batch = torch.tensor(
+        np.stack([X_climate[b.gauge_id] for b in basins]), dtype=torch.float64
     )
     if optimizer is not None:
         net.train()
-        theta_A_batch, theta_B_batch = net(x_batch)
+        theta_A_batch, theta_B_batch = net(x_static_batch, x_climate_batch)
     else:
         net.eval()
         with torch.no_grad():
-            theta_A_batch, theta_B_batch = net(x_batch)
+            theta_A_batch, theta_B_batch = net(x_static_batch, x_climate_batch)
         theta_A_batch = theta_A_batch.detach().requires_grad_(False)
         theta_B_batch = theta_B_batch.detach().requires_grad_(False)
 
@@ -143,7 +155,7 @@ def run_epoch(
 
 
 def main(n_epochs: int = 15, eval_every: int = 3, lr: float = 3e-3) -> None:
-    selected, X = load_basins()
+    selected, X_static, X_climate = load_basins()
     train_ids = selected.loc[selected["split"] == "train", "gauge_id"].tolist()
     heldout_ids = selected.loc[selected["split"] == "heldout", "gauge_id"].tolist()
 
@@ -153,20 +165,23 @@ def main(n_epochs: int = 15, eval_every: int = 3, lr: float = 3e-3) -> None:
     heldout_basins = [BasinExample(gid) for gid in heldout_ids]
     print(f"  done in {time.time()-t0:.1f}s")
 
-    net = ParamNet(n_features=X[train_ids[0]].shape[0])
+    net = ParamNet(
+        n_static_features=X_static[train_ids[0]].shape[0],
+        n_climate_features=X_climate[train_ids[0]].shape[1],
+    )
     stack = CoupledNWSStack()
     optimizer = torch.optim.Adam(net.parameters(), lr=lr)
 
     history = []
     for epoch in range(1, n_epochs + 1):
         t0 = time.time()
-        train_nses = run_epoch(net, stack, train_basins, X, optimizer)
+        train_nses = run_epoch(net, stack, train_basins, X_static, X_climate, optimizer)
         mean_train_nse = float(np.mean(list(train_nses.values())))
         dt = time.time() - t0
 
         row = {"epoch": epoch, "mean_train_nse": mean_train_nse, "seconds": dt}
         if epoch == 1 or epoch % eval_every == 0 or epoch == n_epochs:
-            heldout_nses = run_epoch(net, stack, heldout_basins, X, optimizer=None)
+            heldout_nses = run_epoch(net, stack, heldout_basins, X_static, X_climate, optimizer=None)
             row["mean_heldout_nse"] = float(np.mean(list(heldout_nses.values())))
         history.append(row)
         print(

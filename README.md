@@ -26,18 +26,20 @@ basin): chaining Snow17 -> SAC-SMA -> an NSE-style loss -> `.backward()`
 on real HHWM8 data and optimizing from a perturbed initial guess drives
 the loss from 0.020 to ~0.0003 within a couple of gradient steps
 (`tests/test_pipeline_hhwm8.py`). Day 7-10 (parameter network,
-multi-basin, held-out): `src/paramnet.py` (an MLP -- CLAUDE.md's own
-plan left "LSTM/MLP" undecided; MLP is architecturally correct given the
-input is static per-basin attributes, no sequence for an LSTM to be
-recurrent over) predicts all 27 learnable parameters from 39 CAMELS
-static attributes, trained end-to-end (`src/train.py`) across 35
-snow-dominated CAMELS basins with 10 held out. Real result: train NSE
-`-1.62 -> +0.50`, held-out NSE `-0.46 -> +0.54` over 25 epochs — held-out
-basins tracked training basins closely throughout, no overfitting
-observed at this scale. See [notes/logs.md](notes/logs.md) for the full
-data pipeline (basin selection, the Hamon PET derivation CAMELS' daily
-forcing doesn't provide directly, training-window coverage verification)
-and the result in context.
+multi-basin, held-out): `src/paramnet.py` predicts all 27 learnable
+parameters (11 Snow-17 + 16 SAC-SMA) from each basin's 39 static CAMELS
+attributes plus an LSTM-encoded 12-month climatology sequence (mean
+monthly precip/temp/PET), trained end-to-end (`src/train.py`) across 35
+snow-dominated CAMELS basins with 10 held out. Parameters stay static per
+training rollout regardless of the LSTM -- a hard constraint from this
+project's finite-difference gradient-cost design, see
+[notes/logs.md](notes/logs.md). Real result: train NSE `-0.05 -> +0.62`,
+held-out NSE `+0.23 -> +0.58` over 25 epochs (PET via Hargreaves-Samani,
+see below) -- held-out basins tracked training basins closely throughout,
+no overfitting observed at this scale. See
+[notes/logs.md](notes/logs.md) for the full data pipeline (basin
+selection, PET derivation, training-window coverage verification, the
+MLP-vs-LSTM+Hargreaves comparison) and these results in context.
 
 Native-PyTorch HBV is **not** the current plan — it's the documented Aug
 20 fallback only, see CLAUDE.md.
@@ -52,14 +54,28 @@ submodule itself is never modified.
 
 ## What this is
 
-An LSTM/MLP predicts parameters for both Snow-17 and SAC-SMA from CAMELS
-basin attributes. Snow-17 produces RAIM (rain-plus-melt), the same coupling
-flux NOAA runs operationally into SAC-SMA. Both are compiled Fortran,
-each wrapped as its own Tesseract (`apply` + finite-difference
-`vector_jacobian_product`), composed so a streamflow NSE loss backpropagates
-through both containers to the parameter network. See CLAUDE.md for why two
-Tesseracts (not one merged container, not a manufactured boundary) and for
-the finite-difference cost analysis behind the gradient-coupling design.
+An LSTM-plus-MLP parameter network predicts parameters for both Snow-17
+and SAC-SMA from CAMELS basin attributes and climatology. Snow-17 produces
+RAIM (rain-plus-melt), the same coupling flux NOAA runs operationally into
+SAC-SMA. Both are compiled Fortran, each wrapped as its own Tesseract
+(`apply` + finite-difference `vector_jacobian_product`), composed so a
+streamflow NSE loss backpropagates through both containers to the
+parameter network. See CLAUDE.md for why two Tesseracts (not one merged
+container, not a manufactured boundary) and for the finite-difference cost
+analysis behind the gradient-coupling design.
+
+**Methodological lineage, not code:** the LSTM-encoder-plus-physical-model
+pattern follows the general differentiable-parameter-learning approach
+described in Feng et al. (2022, WRR) and the broader MHPI dPL line of
+work; architecture patterns were informed by studying
+[NeuralHydrology](https://github.com/neuralhydrology/neuralhydrology)
+(Kratzert et al., BSD-3-Clause). MHPI's own `dPLHBVrelease` /
+`generic_deltamodel` / `hydrodl2` are PSU Non-Commercial licensed and
+incompatible with this project's Apache-2.0 submission (CLAUDE.md's
+existing hard constraint) — their source was deliberately not read while
+building this, cited as prior work only. No code from either source is
+copied; this is an original implementation of a well-documented, published
+modeling pattern.
 
 ## Reproduce
 
@@ -84,10 +100,12 @@ it's a separate, ~3.4GB one-time download, deliberately kept out of the
 fast local test loop.
 
 ```bash
-data/download_camels.sh          # downloads attribute files + forcing/streamflow archive
-.venv/bin/python data/select_basins.py     # -> data/camels/selected_basins.csv
-.venv/bin/python data/build_attributes.py  # -> data/camels/basin_attributes.npz
-.venv/bin/python src/train.py              # trains, prints per-epoch train/held-out NSE
+data/download_camels.sh                      # downloads attribute files + forcing/streamflow archive
+.venv/bin/python data/select_basins.py       # -> data/camels/selected_basins.csv
+.venv/bin/python data/build_attributes.py    # -> data/camels/basin_attributes.npz
+.venv/bin/python data/build_pet.py           # -> data/camels/pet/{gauge_id}_pet.csv (Hargreaves)
+.venv/bin/python data/build_climatology.py   # -> data/camels/basin_climatology.npz
+.venv/bin/python src/train.py                # trains, prints per-epoch train/held-out NSE
 ```
 
 `tests/test_train.py` skips gracefully (like the Docker container test
@@ -121,12 +139,14 @@ src/snow17.py                     ctypes wrapper around the snow17 shim (float32
 src/sacsma.py                     ctypes wrapper around the sacsma shim (float64)
 src/coupling.py                   cross-model gradient orchestration (option 1.5, see CLAUDE.md)
 src/pipeline.py                   wires the real Tesseracts into coupling.py, reused across basins
-src/paramnet.py                   MLP: 39 CAMELS static attributes -> 27 bounded Snow17/SAC-SMA parameters
+src/paramnet.py                   LSTM (12-mo climatology) + static attrs -> 27 bounded parameters
 src/train.py                      multi-basin training loop + held-out evaluation
 data/download_camels.sh           one-time ~3.4GB CAMELS download (not run by make test)
 data/select_basins.py             picks snow-dominated basins by frac_snow, train/heldout split
 data/build_attributes.py          builds the 39-feature normalized static attribute matrix
-data/camels_loader.py             per-basin forcing/streamflow loader + Hamon PET derivation
+data/build_pet.py                 precomputes + caches Hargreaves PET per basin (data/camels/pet/)
+data/build_climatology.py         builds the 12-month climatology sequence per basin (LSTM input)
+data/camels_loader.py             per-basin forcing/streamflow loader + Hargreaves PET (cached)
 tesseracts/snow17/                 Tesseract wrapper: apply() + finite-difference vector_jacobian_product()
 tesseracts/sacsma/                 same, for SAC-SMA
 tests/test_snow17_shim.py          determinism, state continuity, mass balance + reference cross-checks
