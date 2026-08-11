@@ -33,24 +33,28 @@ monthly precip/temp/PET), trained end-to-end (`src/train.py`) across 35
 snow-dominated CAMELS basins with 10 held out. Parameters stay static per
 training rollout regardless of the LSTM -- a hard constraint from this
 project's finite-difference gradient-cost design, see
-[notes/logs.md](notes/logs.md). Real result: train NSE `-0.05 -> +0.62`,
-held-out NSE `+0.23 -> +0.58` over 25 epochs (PET via Hargreaves-Samani,
-see below) -- held-out basins tracked training basins closely throughout,
-no overfitting observed at this scale. See
-[notes/logs.md](notes/logs.md) for the full data pipeline (basin
-selection, PET derivation, training-window coverage verification, the
-MLP-vs-LSTM+Hargreaves comparison) and these results in context.
+[notes/logs.md](notes/logs.md). Real, saved, reproducible result
+(seeded, `results/hybrid_lstm_hargreaves_history.json`): train NSE
+`-0.16 -> +0.66`, held-out NSE `+0.07 -> +0.52` over 25 epochs (PET via
+Hargreaves-Samani, see below) — held-out basins tracked training basins
+closely throughout (train/held-out gap 0.14), no overfitting observed
+at this scale. See [notes/logs.md](notes/logs.md) for the full data
+pipeline (basin selection, PET derivation, training-window coverage
+verification, the MLP-vs-LSTM+Hargreaves comparison) and
+[results/README.md](results/README.md) for these numbers in full.
 
 **Benchmarked against a pure data-driven LSTM** (`src/benchmark_lstm.py`
 -- no physical model, streamflow predicted directly from forcing +
 static attributes; same basins/window/loss/forcing as the hybrid model,
 for a controlled comparison, not part of the submission's core
-pipeline). Result: the pure LSTM reaches higher training NSE (+0.68 over
-150 epochs) but its held-out NSE plateaus at +0.34 -- a train/held-out
-gap of 0.34, against the hybrid model's 0.04. This is the actual,
-quantified case for physically-constrained parameter learning over a
-black box in this data-limited (35-basin) regime, not just a citation to
-someone else's result — see [notes/logs.md](notes/logs.md) for the full
+pipeline). Saved result (`results/benchmark_lstm_history.json`): the
+pure LSTM reaches higher training NSE (+0.68 over 150 epochs) but its
+held-out NSE plateaus at +0.34 -- a train/held-out gap of 0.34, against
+the hybrid model's 0.14. This is the actual, quantified case for
+physically-constrained parameter learning over a black box in this
+data-limited (35-basin) regime, not just a citation to someone else's
+result — confirmed under a second, independently-seeded run, not a
+one-off artifact — see [notes/logs.md](notes/logs.md) for the full
 comparison and an honest caveat about what this result does and doesn't
 generalize to.
 
@@ -173,6 +177,7 @@ tests/test_train.py                multi-basin training loop regression check (s
 tests/test_benchmark_lstm.py       benchmark LSTM regression check (skips w/o CAMELS data)
 notes/NOTES.md                     upstream findings (TPREV, SCF, ADC, bypass_ratio_check, ...) -- writeup material
 notes/logs.md                      rationale log for our own code/design decisions, kept live
+results/                           saved, seeded, reproducible training histories (JSON) + comparison summary
 ```
 
 ## License

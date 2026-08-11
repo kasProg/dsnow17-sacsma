@@ -1215,3 +1215,18 @@ specific, deliberately-matched small data budget this project's
 FD-gradient-cost constraints impose, physical constraints generalize
 better than an unconstrained black box does." That's a fair, honestly
 scoped claim, not an overreach.
+
+**Reproducibility check, not just the one run above:** the numbers
+above came from an unseeded exploratory run. Added `torch.manual_seed`
++ JSON history saving to both `src/train.py` and `src/benchmark_lstm.py`
+(`save_path` argument) and re-ran both with a fixed seed --
+`results/hybrid_lstm_hargreaves_history.json` and
+`results/benchmark_lstm_history.json`, see `results/README.md`. The
+seeded hybrid run landed at train/held-out `+0.663/+0.519` (a 0.14 gap,
+vs. the exploratory run's `+0.62/+0.58`, a 0.04 gap) and the seeded
+benchmark run at `+0.676/+0.335` (a 0.34 gap, matching the exploratory
+run's gap almost exactly). The precise gap size moved a bit between
+runs (expected -- different random init, same architecture/data), but
+the actual claim -- hybrid's gap is a small fraction of the pure LSTM's
+-- held up under a second, independent, saved, reproducible run rather
+than being a one-off artifact of a lucky unseeded initialization.

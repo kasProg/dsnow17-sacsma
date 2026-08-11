@@ -154,7 +154,15 @@ def run_epoch(
     return nses
 
 
-def main(n_epochs: int = 15, eval_every: int = 3, lr: float = 3e-3) -> None:
+def main(
+    n_epochs: int = 15,
+    eval_every: int = 3,
+    lr: float = 3e-3,
+    seed: int = 0,
+    save_path: str | Path | None = None,
+) -> None:
+    torch.manual_seed(seed)  # reproducible network init -- see notes/logs.md
+
     selected, X_static, X_climate = load_basins()
     train_ids = selected.loc[selected["split"] == "train", "gauge_id"].tolist()
     heldout_ids = selected.loc[selected["split"] == "heldout", "gauge_id"].tolist()
@@ -189,6 +197,19 @@ def main(n_epochs: int = 15, eval_every: int = 3, lr: float = 3e-3) -> None:
             + (f"  heldout_nse={row.get('mean_heldout_nse'):+.4f}" if "mean_heldout_nse" in row else "")
             + f"  ({dt:.1f}s)"
         )
+
+    if save_path is not None:
+        import json
+
+        Path(save_path).write_text(json.dumps({
+            "model": "hybrid_snow17_sacsma_paramnet",
+            "seed": seed, "n_epochs": n_epochs, "lr": lr,
+            "n_train_basins": len(train_ids), "n_heldout_basins": len(heldout_ids),
+            "window_start": str(WINDOW_START), "window_end": str(WINDOW_END),
+            "train_basin_ids": train_ids, "heldout_basin_ids": heldout_ids,
+            "history": history,
+        }, indent=2))
+        print(f"Saved training history -> {save_path}")
 
     return net, history, train_basins, heldout_basins
 
