@@ -1,12 +1,11 @@
-# dsnow17-hbv
+# dsnow17-sacsma
 
 Differentiable NWS operational forecasting stack — Snow-17 feeding SAC-SMA,
 both legacy Fortran — wrapped in two composed
 [Tesseract](https://github.com/pasteurlabs/tesseract) containers, built for
 the Pasteur Labs Tesseract Hackathon 2026 (Track 03: Hybrid ML + mechanistic
 models). See [CLAUDE.md](CLAUDE.md) for the full design writeup and status
-log. (Repo name predates the current plan and hasn't been settled yet — see
-CLAUDE.md's repo layout note.)
+log.
 
 **Status:** Both Fortran shims built and tested. Both Tesseract wrappers
 (`tesseracts/snow17/`, `tesseracts/sacsma/`) built and gradient-checked
