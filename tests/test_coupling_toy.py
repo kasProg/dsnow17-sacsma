@@ -145,7 +145,10 @@ def _run_coupled(forcings, fd_a: FDConfig, fd_b: FDConfig):
     stage_a = _CountingStage(toy_snow_numpy)
     stage_b = _CountingStage(toy_sac_numpy)
 
-    runoff = CoupledTwoStageFunction.apply(theta_A, theta_B, forcings, stage_a, stage_b, fd_a, fd_b)
+    # vjp_b=None: toy stand-ins have no Tesseract endpoint to route
+    # through, so theta_B falls back to the same hand-rolled FD sweep as
+    # theta_A -- see coupling.py's module docstring.
+    runoff = CoupledTwoStageFunction.apply(theta_A, theta_B, forcings, stage_a, stage_b, fd_a, fd_b, None)
     assert not runoff.requires_grad or runoff.grad_fn is not None  # sanity: real graph node
     return theta_A, theta_B, runoff, stage_a, stage_b
 
@@ -269,7 +272,7 @@ def test_mixed_dtype_thetas_get_matching_gradient_dtypes(forcings, observed):
 
     stage_a = _CountingStage(toy_snow_numpy)
     stage_b = _CountingStage(toy_sac_numpy)
-    runoff = CoupledTwoStageFunction.apply(theta_A, theta_B, forcings, stage_a, stage_b, fd, fd)
+    runoff = CoupledTwoStageFunction.apply(theta_A, theta_B, forcings, stage_a, stage_b, fd, fd, None)
     assert runoff.dtype == torch.float64
 
     obs_t = torch.tensor(observed, dtype=torch.float64)

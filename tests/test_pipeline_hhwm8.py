@@ -148,3 +148,42 @@ def test_loss_decreases_with_synthetic_target_recovery(hhwm8_setup):
         f"loss did not drop substantially over {n_steps} steps: "
         f"{losses[0]:.4f} -> {losses[-1]:.4f} (full trace: {losses})"
     )
+
+
+def test_sacsma_vjp_matches_fd_fallback(hhwm8_setup):
+    """theta_B's gradient now routes through SAC-SMA's own Tesseract
+    vector_jacobian_product() endpoint by default (CoupledNWSStack's
+    use_sacsma_vjp=True) instead of coupling.py's hand-rolled central-FD
+    sweep (use_sacsma_vjp=False, the previous behavior, still available
+    as a fallback). This is exactly the "two different gradient-
+    computation machineries feeding the same upstream network" situation
+    coupling.py's module docstring flags as a double-counting/sign-error
+    risk -- so check the two paths actually agree on real HHWM8 data,
+    not just trust the wiring by inspection.
+
+    theta_A's path is untouched by use_sacsma_vjp either way (only
+    theta_B's block branches on it), so its gradient should match
+    bitwise across both stacks -- checked as a control, not the point of
+    this test."""
+    _, snow17_forcing, sacsma_forcing, theta_A_true, theta_B_true = hhwm8_setup
+
+    stack_vjp = CoupledNWSStack()  # use_sacsma_vjp=True, the new default
+    stack_fd = CoupledNWSStack(use_sacsma_vjp=False)  # old hand-rolled sweep
+
+    def _grads(stack):
+        theta_A = torch.tensor(theta_A_true, dtype=torch.float32, requires_grad=True)
+        theta_B = torch.tensor(theta_B_true, dtype=torch.float64, requires_grad=True)
+        sim = stack.run(theta_A, theta_B, snow17_forcing, sacsma_forcing)
+        sim.sum().backward()  # simplest cotangent: all-ones
+        return theta_A.grad.clone(), theta_B.grad.clone()
+
+    grad_A_vjp, grad_B_vjp = _grads(stack_vjp)
+    grad_A_fd, grad_B_fd = _grads(stack_fd)
+
+    torch.testing.assert_close(grad_A_vjp, grad_A_fd, rtol=0, atol=0)  # unaffected path -- exact
+
+    # theta_B: SAC-SMA's own VJP is forward-difference; the fallback sweep
+    # is central-difference. Different formulas at the same eps -- expect
+    # first-order agreement, not bitwise, but a sign flip, wrong param
+    # order, or wrong output name would blow well past this.
+    torch.testing.assert_close(grad_B_vjp, grad_B_fd, rtol=0.05, atol=1e-2)

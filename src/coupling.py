@@ -20,11 +20,21 @@ end-to-end VJP that only costs one A+B run pair per parameter. theta_B's
 cached base value and only stage B reruns.
 
 Both blocks are computed inside ONE Function's backward(), sharing one
-ctx cache of the base forward pass -- not one custom block plus one
-normally-composed block. That symmetry is deliberate: two different
-gradient-computation machineries feeding the same upstream network would
-be a real risk of double-counting or sign errors for no benefit, since
-theta_B's block is just a shorter version of the same sweep.
+ctx cache of the base forward pass. theta_A's block has no honest
+alternative to the hand-rolled FD sweep below -- it needs stage_a rerun,
+which no single Tesseract's own vector_jacobian_product() can do (that
+endpoint only differentiates ITS OWN apply(), not a downstream
+container). theta_B's block is different: RAIM is held fixed and never
+recomputed, so it needs nothing stage_b's own Tesseract doesn't already
+offer through its own vector_jacobian_product() endpoint (FD-based,
+identically cheap -- one perturbed rollout per parameter, no per-RAIM-
+timestep cost). CoupledNWSStack (pipeline.py) passes an optional `vjp_b`
+callable wired to that real endpoint; when present, backward() calls it
+instead of reimplementing the same sweep here. `vjp_b=None` (the toy
+tests, and any caller without a real Tesseract handy) falls back to the
+hand-rolled block, so both paths are exercised and kept honest against
+each other -- see tests/test_pipeline_hhwm8.py's
+test_sacsma_vjp_matches_fd_fallback.
 """
 
 from __future__ import annotations
@@ -65,18 +75,24 @@ class FDConfig:
 class CoupledTwoStageFunction(torch.autograd.Function):
     """Couples stage_a -> stage_b (A's output feeds B) as one autograd node.
 
-    forward(theta_A, theta_B, forcings, stage_a, stage_b, fd_a, fd_b) -> output_b
+    forward(theta_A, theta_B, forcings, stage_a, stage_b, fd_a, fd_b, vjp_b) -> output_b
 
     theta_A, theta_B: torch tensors (leaves predicted by the upstream
     network), differentiated by this Function.
     forcings: passed through to stage_a unchanged; never differentiated.
-    stage_a, stage_b, fd_a, fd_b: plain Python objects (callables/config),
-    not tensors -- torch.autograd.Function accepts non-tensor forward
-    args positionally; backward must return None for each of their slots.
+    stage_a, stage_b, fd_a, fd_b, vjp_b: plain Python objects
+    (callables/config), not tensors -- torch.autograd.Function accepts
+    non-tensor forward args positionally; backward must return None for
+    each of their slots. vjp_b is REQUIRED at every call site (pass
+    `None` explicitly to use the FD fallback) -- it is not given a
+    Python-level default, because torch.autograd.Function's backward
+    must return exactly as many values as forward received positional
+    args at that specific .apply() call, and a default silently omitted
+    at one call site but not another would desync that count.
     """
 
     @staticmethod
-    def forward(ctx, theta_A, theta_B, forcings, stage_a, stage_b, fd_a, fd_b):
+    def forward(ctx, theta_A, theta_B, forcings, stage_a, stage_b, fd_a, fd_b, vjp_b):
         theta_A_np = theta_A.detach().cpu().numpy().astype(np.float64)
         theta_B_np = theta_B.detach().cpu().numpy().astype(np.float64)
 
@@ -96,6 +112,7 @@ class CoupledTwoStageFunction(torch.autograd.Function):
         ctx.stage_b = stage_b
         ctx.fd_a = fd_a
         ctx.fd_b = fd_b
+        ctx.vjp_b = vjp_b
         ctx.theta_A_np = theta_A_np
         ctx.theta_B_np = theta_B_np
         ctx.forcings = forcings
@@ -137,18 +154,26 @@ class CoupledTwoStageFunction(torch.autograd.Function):
             base_output=ctx.output_b_base,
         )
 
-        grad_theta_B = _fd_vjp_block(
-            theta=ctx.theta_B_np,
-            fd=ctx.fd_b,
-            grad_output=grad_output_np,
-            # RAIM held at the cached base -- stage_a is NEVER called here.
-            run=lambda theta_perturbed: ctx.stage_b(theta_perturbed, ctx.output_a_base),
-            base_output=ctx.output_b_base,
-        )
+        if ctx.vjp_b is not None:
+            # theta_B never needs stage_a rerun (RAIM held at the cached
+            # base) -- so, unlike theta_A, there is no FD-cost reason to
+            # avoid stage_b's own Tesseract vector_jacobian_product()
+            # endpoint. vjp_b (built by pipeline.py's CoupledNWSStack)
+            # wraps exactly that call.
+            grad_theta_B = ctx.vjp_b(ctx.theta_B_np, ctx.output_a_base, grad_output_np)
+        else:
+            grad_theta_B = _fd_vjp_block(
+                theta=ctx.theta_B_np,
+                fd=ctx.fd_b,
+                grad_output=grad_output_np,
+                # RAIM held at the cached base -- stage_a is NEVER called here.
+                run=lambda theta_perturbed: ctx.stage_b(theta_perturbed, ctx.output_a_base),
+                base_output=ctx.output_b_base,
+            )
 
         grad_theta_A_t = torch.as_tensor(grad_theta_A, dtype=ctx.theta_A_dtype, device=ctx.theta_A_device)
         grad_theta_B_t = torch.as_tensor(grad_theta_B, dtype=ctx.theta_B_dtype, device=ctx.theta_B_device)
-        return grad_theta_A_t, grad_theta_B_t, None, None, None, None, None
+        return grad_theta_A_t, grad_theta_B_t, None, None, None, None, None, None
 
 
 def _fd_vjp_block(

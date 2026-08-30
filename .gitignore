@@ -42,6 +42,22 @@ results/predictions/
 .hydra/
 *.log
 
+# tesseract_core.Tesseract.from_tesseract_api()'s LocalClient creates one
+# of these per client (so two per CoupledNWSStack -- snow17 + sacsma) via
+# tempfile.mkdtemp(prefix="tesseract_output_") whenever output_path isn't
+# passed explicitly (every call site in this repo). Never cleaned up by
+# the SDK itself, and lands in the repo root rather than /tmp if $TMPDIR
+# is pointed here -- see chat log / notes/logs.md for the investigation.
+tesseract_output_*/
+
+# PyTorch's TorchInductor compiled-kernel cache (torch._inductor) --
+# same tempfile.gettempdir() root cause as tesseract_output_* above, not
+# anything this repo requests explicitly (no torch.compile() call site
+# exists here). Confirms $TMPDIR is pointed at this repo rather than
+# /tmp in this environment -- worth fixing at the shell/env level, not
+# just gitignoring, since it's the same cause behind both directories.
+torchinductor_*/
+
 # OS / editor
 .DS_Store
 .vscode/
