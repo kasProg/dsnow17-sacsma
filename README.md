@@ -95,6 +95,13 @@ from scratch and smoke-testing `apply()` against the built images (see
 
 ## Results
 
+*(NSE — Nash-Sutcliffe Efficiency — is the standard skill metric for
+streamflow models below. 1.0 is a perfect match to observed flow; 0
+means the model is no better than just guessing the historical average
+every day; negative is worse than that. There's no fixed ceiling below
+1.0 — "good" is domain- and basin-dependent, but 0.7+ is generally
+read as a solid, usable forecast.)*
+
 `ParamNet` predicts all 27 learnable parameters (11 Snow-17 + 16
 SAC-SMA) from each basin's static CAMELS attributes plus a climatology
 sequence, trained end-to-end across 35 snow-dominated CAMELS basins
@@ -118,6 +125,14 @@ trained and tested on the *exact same* 35/10 basin split:
 |---|---|
 | NeuralHydrology LSTM | **0.795** |
 | this hybrid model | 0.70 |
+
+![Held-out NSE per basin, hybrid model vs. NeuralHydrology LSTM](results/basin_nse_comparison.png)
+
+The medians above compress this down to two numbers; basin by basin
+it's closer than that — the LSTM leads on 6 of 10, the hybrid model
+wins on 4, and the gap ranges from essentially tied (`09035900`,
+0.822 vs. 0.809) to wide open (`11230500`, 0.408 vs. 0.827).
+(Regenerate with `results/plot_basin_comparison.py`.)
 
 Against a competent LSTM, this hybrid model currently trails on raw
 NSE — see [results/external/neuralhydrology_lstm_pub/](results/external/neuralhydrology_lstm_pub/README.md).
