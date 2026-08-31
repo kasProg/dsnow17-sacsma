@@ -1,112 +1,105 @@
-# dsnow17-sacsma
+# 𝛿snow17-sacsma
 
-Differentiable NWS operational forecasting stack — Snow-17 feeding SAC-SMA,
-both legacy Fortran — wrapped in two composed
-[Tesseract](https://github.com/pasteurlabs/tesseract) containers, built for
-the Pasteur Labs Tesseract Hackathon 2026 (Track 03: Hybrid ML + mechanistic
-models). See [CLAUDE.md](CLAUDE.md) for the full design writeup and status
-log.
+**Snow-17** and **SAC-SMA** — the NWS's operational snowmelt and
+soil-moisture models, both real, decades-old NOAA-OWP Fortran — wrapped
+as two composed [Tesseract](https://github.com/pasteurlabs/tesseract)
+containers and made end-to-end differentiable. A neural network learns
+both models' parameters directly from basin attributes by
+backpropagating a streamflow loss through the coupled Fortran physics.
 
-**Status:** Both Fortran shims built and tested. Both Tesseract wrappers
-(`tesseracts/snow17/`, `tesseracts/sacsma/`) built and gradient-checked
-end-to-end, including through real `torch` graphs via `tesseract-torch`'s
-`apply_tesseract()`. The cross-model gradient-coupling design
-(`src/coupling.py`, "option 1.5" in CLAUDE.md) is built, validated against
-autograd ground truth + an independent brute-force check on cheap
-stand-ins first (`tests/test_coupling_toy.py`), then wired to the real
-Tesseracts (`src/pipeline.py`). `tesseract build` can't run on this
-development machine (no Docker access — see [Reproduce](#reproduce)) but
-runs in CI on every push, building both containers from scratch and
-smoke-testing `apply()` against the actual built images — see
-[.github/workflows/ci.yml](.github/workflows/ci.yml).
+Built for the Pasteur Labs Tesseract Hackathon 2026, Track 03 (Hybrid
+ML + mechanistic models).
 
-**CLAUDE.md's Day 5-10 checkpoints are both met.** Day 5-6 (single
-basin): chaining Snow17 -> SAC-SMA -> an NSE-style loss -> `.backward()`
-on real HHWM8 data and optimizing from a perturbed initial guess drives
-the loss from 0.020 to ~0.0003 within a couple of gradient steps
-(`tests/test_pipeline_hhwm8.py`). Day 7-10 (parameter network,
-multi-basin, held-out): `src/paramnet.py` predicts all 27 learnable
-parameters (11 Snow-17 + 16 SAC-SMA) from each basin's 39 static CAMELS
-attributes plus an LSTM-encoded 12-month climatology sequence (mean
-monthly precip/temp/PET), trained end-to-end (`src/train.py`) across 35
-snow-dominated CAMELS basins with 10 held out. Parameters stay static per
-training rollout regardless of the LSTM -- a hard constraint from this
-project's finite-difference gradient-cost design, see
-[notes/logs.md](notes/logs.md). Real, saved, reproducible result
-(seeded, `results/runs/model_10yrs_spatial/`, WY1991-1999, 9 years):
-median train NSE `+0.38 -> +0.84`, median held-out NSE `+0.28 -> +0.70`
-over 150 epochs (PET via Hargreaves-Samani, see below) — held-out
-basins tracked training basins closely throughout (train/held-out gap
-0.14), no overfitting observed at this scale. See
-[notes/logs.md](notes/logs.md) for the full data pipeline (basin
-selection, PET derivation, training-window coverage verification, the
-MLP-vs-LSTM+Hargreaves comparison) and
-[results/README.md](results/README.md) for these numbers in full.
+## Architecture
 
-**Checked against a properly-engineered LSTM.** A
-[NeuralHydrology](https://github.com/neuralhydrology/neuralhydrology)
-LSTM (256 hidden units, 5 forcing variables, proper minibatched
-training), trained and tested on the *exact same* 35 train / 10 heldout
-basin split as the hybrid model, reaches **median held-out NSE 0.795**
--- ahead of the hybrid model's 0.70. Said plainly: against a competent
-LSTM, the hybrid model currently trails on this metric, not leads. See
-[`results/external/neuralhydrology_lstm_pub/`](results/external/neuralhydrology_lstm_pub/README.md)
-for that comparison in full. This project's actual contribution
-(differentiating through real NOAA-OWP operational Fortran via composed
-Tesseracts) doesn't depend on beating an LSTM on raw NSE; see "What
-this is" below.
+```mermaid
+flowchart LR
+    ATTR["CAMELS attributes<br/>+ climatology"] --> NET["ParamNet<br/>(LSTM + MLP)"]
 
-Native-PyTorch HBV is **not** the current plan — it's the documented Aug
-20 fallback only, see CLAUDE.md.
+    subgraph TESS["Two composed Tesseracts"]
+        direction LR
+        T1["Tesseract A<br/>Snow-17<br/>(NOAA-OWP Fortran)"] -- "RAIM<br/>(rain + melt)" --> T2["Tesseract B<br/>SAC-SMA<br/>(NOAA-OWP Fortran)"]
+    end
 
-**Training and inference are now config-driven (Hydra),** not
-hardcoded scripts. `src/train.py`/`src/infer.py` compose a config from
-`configs/` (which data, which model, which train/test split) instead of
-taking constants baked into the code — the same infrastructure runs
-either split type: **spatial** (prediction in ungauged basins — this
-project's current 45-basin setup) or **temporal** (prediction in
-ungauged period — same basins, different train/test date windows; a
-working code path as of this refactor, not yet exercised by a saved
-result, added for a planned later full-CAMELS-671 comparison against
-SOTA differentiable hydrology models, see `notes/logs.md`). See
-[Reproducing experiments](#reproducing-experiments) below. Regenerating
-both existing results through the new CLI with the same seed reproduced
-the pre-refactor numbers epoch-for-epoch — this was a format/
-infrastructure change, not a re-run with different behavior (see
-`notes/logs.md`).
+    NET -- "θ_A" --> T1
+    NET -- "θ_B" --> T2
+    FORC["precip + temperature"] --> T1
+    PET["PET"] --> T2
+    T2 --> SIM["Simulated<br/>streamflow"] --> LOSS["NSE loss vs.<br/>observed streamflow"]
 
-**Found and fixed one real, live upstream bug along the way:** a Fortran
-implicit-`SAVE` state-leakage bug in SAC-SMA's `sac1.f90` (not gated behind
-any disabled flag, unlike the Snow-17 issues below) — full writeup with an
-empirical before/after proof in [notes/NOTES.md](notes/NOTES.md), fixed via
-a disclosed, minimal, build-time-only patch (see
-[patches/](patches/sac1_bypass_ratio_check_save_fix.patch)); the vendored
+    LOSS -. "θ_B: SAC-SMA's own VJP" .-> NET
+    LOSS -. "θ_A: perturb + rerun both models" .-> NET
+```
+
+Solid arrows are the forward pass. The two dashed arrows are gradients,
+and they're deliberately not symmetric: θ_B's uses SAC-SMA's own
+Tesseract VJP endpoint directly. θ_A's doesn't — Snow-17's parameters
+only reach the loss through RAIM (~3,650 daily values), and no
+Tesseract's VJP can differentiate a downstream container it doesn't
+own, so θ_A's gradient instead perturbs each Snow-17 parameter and
+reruns both models, reading how the final runoff moved. Snow-17
+produces RAIM (rain-plus-melt) — the same coupling flux NOAA runs
+operationally into SAC-SMA — so the container boundary sits at a real,
+existing operational seam, not one invented for this project.
+
+## Why Tesseract
+
+PyTorch's `.backward()` walks a recorded graph — Snow-17 and SAC-SMA
+are compiled Fortran, so nothing is recorded and autodiff stops cold.
+Each model is wrapped as its own Tesseract exposing `apply()` and a
+finite-difference `vector_jacobian_product()`; `tesseract-torch` splices
+both into the autograd graph as ordinary differentiable layers. Two
+Tesseracts are composed here, not one merged container, because the
+boundary is real: NOAA maintains Snow-17 and SAC-SMA as separate
+modules, and a standalone Snow-17 Tesseract is reusable with any
+downstream rainfall-runoff model, not just this one.
+
+Both containers are built and gradient-checked end-to-end — against
+autograd ground truth and an independent brute-force check on cheap
+stand-ins first (`tests/test_coupling_toy.py`), then against the real
+Tesseracts (`tests/test_pipeline_hhwm8.py`, `tests/test_gradients.py`).
+`tesseract build` runs in CI on every push, building both containers
+from scratch and smoke-testing `apply()` against the built images (see
+[.github/workflows/ci.yml](.github/workflows/ci.yml)).
+
+## Results
+
+`ParamNet` predicts all 27 learnable parameters (11 Snow-17 + 16
+SAC-SMA) from each basin's static CAMELS attributes plus a climatology
+sequence, trained end-to-end across 35 snow-dominated CAMELS basins
+with 10 held out (WY1991-1999, spatial holdout — prediction in
+ungauged basins):
+
+| | median train NSE | median held-out NSE |
+|---|---|---|
+| epoch 1 | +0.38 | +0.28 |
+| epoch 150 (final) | **+0.84** | **+0.70** |
+
+Held-out basins track training basins closely throughout (gap ~0.14) —
+no overfitting observed at this scale. Full numbers, an earlier 3-year
+pilot run, and reproduction commands: [results/README.md](results/README.md).
+
+Checked honestly against a properly-engineered LSTM
+([NeuralHydrology](https://github.com/neuralhydrology/neuralhydrology)),
+trained and tested on the *exact same* 35/10 basin split:
+
+| model | median held-out NSE |
+|---|---|
+| NeuralHydrology LSTM | **0.795** |
+| this hybrid model | 0.70 |
+
+Against a competent LSTM, this hybrid model currently trails on raw
+NSE — see [results/external/neuralhydrology_lstm_pub/](results/external/neuralhydrology_lstm_pub/README.md).
+That's not what this project is arguing: the contribution is
+differentiating through real NOAA-OWP operational Fortran via composed
+Tesseracts, not beating an LSTM's held-out NSE.
+
+Also found and fixed one live upstream bug along the way: a Fortran
+implicit-`SAVE` state-leakage bug in SAC-SMA's `sac1.f90`, with an
+empirical before/after proof — see [notes/NOTES.md](notes/NOTES.md) and
+the disclosed, build-time-only patch in
+[patches/](patches/sac1_bypass_ratio_check_save_fix.patch); the vendored
 submodule itself is never modified.
-
-## What this is
-
-An LSTM-plus-MLP parameter network predicts parameters for both Snow-17
-and SAC-SMA from CAMELS basin attributes and climatology. Snow-17 produces
-RAIM (rain-plus-melt), the same coupling flux NOAA runs operationally into
-SAC-SMA. Both are compiled Fortran, each wrapped as its own Tesseract
-(`apply` + finite-difference `vector_jacobian_product`), composed so a
-streamflow NSE loss backpropagates through both containers to the
-parameter network. See CLAUDE.md for why two Tesseracts (not one merged
-container, not a manufactured boundary) and for the finite-difference cost
-analysis behind the gradient-coupling design.
-
-**Methodological lineage, not code:** the LSTM-encoder-plus-physical-model
-pattern follows the general differentiable-parameter-learning approach
-described in Feng et al. (2022, WRR) and the broader MHPI dPL line of
-work; architecture patterns were informed by studying
-[NeuralHydrology](https://github.com/neuralhydrology/neuralhydrology)
-(Kratzert et al., BSD-3-Clause). MHPI's own `dPLHBVrelease` /
-`generic_deltamodel` / `hydrodl2` are PSU Non-Commercial licensed and
-incompatible with this project's Apache-2.0 submission (CLAUDE.md's
-existing hard constraint) — their source was deliberately not read while
-building this, cited as prior work only. No code from either source is
-copied; this is an original implementation of a well-documented, published
-modeling pattern.
 
 ## Reproduce
 
@@ -114,158 +107,63 @@ Requires [uv](https://docs.astral.sh/uv/) and `gfortran`.
 
 ```bash
 git submodule update --init --recursive   # vendors NOAA-OWP/snow17 + sac-sma, pinned commits
-make test                                  # creates .venv via uv, builds shims, runs pytest
+make test                                  # creates .venv, builds Fortran shims, runs pytest
 ```
 
-`make test` builds the shims without `-fcheck=bounds` for speed. Use
-`make build-checked` during development to catch out-of-bounds Fortran
-array access (relevant to the `ADC(11)` vs `ADC(12)` issue noted in
-[CLAUDE.md](CLAUDE.md) and [notes/NOTES.md](notes/NOTES.md)).
-
-Tests extract `external/snow17/test_cases/ex1.tgz` on first run to get
-reference forcing/parameters/output for validation — no manual step needed.
-SAC-SMA's ex1 reference (same HHWM8 basin/period) ships unpacked already.
-
-**CAMELS data (multi-basin training):** not fetched by `make test` —
-it's a separate, ~3.4GB one-time download, deliberately kept out of the
-fast local test loop.
+Multi-basin training needs CAMELS data (~3.4GB, one-time, not fetched
+by `make test`):
 
 ```bash
-data/download_camels.sh                      # downloads attribute files + forcing/streamflow archive
-.venv/bin/python data/select_basins.py       # -> data/camels/selected_basins.csv
-.venv/bin/python data/build_attributes.py    # -> data/camels/basin_attributes.npz
-.venv/bin/python data/build_pet.py           # -> data/camels/pet/{gauge_id}_pet.csv (Hargreaves)
-.venv/bin/python data/build_climatology.py   # -> data/camels/basin_climatology.npz
-```
+data/download_camels.sh
+.venv/bin/python data/select_basins.py
+.venv/bin/python data/build_attributes.py
+.venv/bin/python data/build_pet.py
+.venv/bin/python data/build_climatology.py
 
-`tests/test_train.py` skips gracefully (like the Docker container test
-below) when this data isn't present.
-
-## Reproducing experiments
-
-Training and inference are driven by [Hydra](https://hydra.cc/) configs
-under `configs/` — one CLI (`src/train.py`), config groups select the
-model, the data, and the train/test split instead of editing constants
-in code. `src/infer.py` follows the same pattern for scoring a saved
-checkpoint. Defaults reproduce this repo's saved results exactly:
-
-```bash
-# Hybrid model (Snow17+SAC-SMA+ParamNet), spatial split -- the defaults,
-# reproduces results/runs/model_10yrs_spatial/ (~13 min, see Compute below)
-.venv/bin/python src/train.py
-
-# Override anything from the CLI, e.g. a different seed or window:
-.venv/bin/python src/train.py seed=1
-.venv/bin/python src/train.py split.window.start=1985-10-01 split.window.end=1988-09-30
-
-# Score a saved checkpoint (no training) -- writes predictions.json
+.venv/bin/python src/train.py                                  # trains the hybrid model (~13 min, CPU)
 .venv/bin/python src/infer.py checkpoint=results/runs/model_10yrs_spatial/checkpoint.pt
-
-# Compare any number of saved runs' train/test NSE side by side + plot
-.venv/bin/python results/compare_runs.py \
-    results/runs/model_10yrs_spatial results/runs/hybrid_spatial_seed0
 ```
 
-**Config groups** (`configs/<group>/*.yaml`, composed by `configs/config.yaml`):
+Training/inference are driven by [Hydra](https://hydra.cc/) configs
+under `configs/` (data / split / model / train) rather than hardcoded
+constants — override anything from the CLI, e.g. `seed=1` or
+`split.window.end=1993-09-30`. Everything runs on CPU; the
+Fortran/Tesseract calls (finite-difference gradients) are the
+bottleneck, not model size, so a GPU wouldn't help. See
+[results/README.md](results/README.md) for saved runs and
+`results/compare_runs.py` for comparing them.
 
-| group | options | controls |
-|---|---|---|
-| `data` | `camels_snow35` | which CAMELS derived files to load (basin set, attributes, climatology) |
-| `split` | `spatial`, `temporal` | **spatial**: fixed window, basins partitioned train/heldout (prediction in ungauged basins — this project's current setup). **temporal**: same basins, different train/test date windows (prediction in ungauged period — a working code path, not yet used by a saved result; built for a later full-CAMELS-671 comparison against SOTA differentiable hydrology models, see `notes/logs.md`) |
-| `model` | `hybrid` | the physically-constrained Snow17+SAC-SMA+ParamNet stack (kept as a config group -- not collapsed away -- since a second model, e.g. the parked full-CAMELS-671/temporal comparison, would need this same shape again) |
-| `train` | `hybrid` | epochs/lr/eval frequency |
-
-Every run writes its resolved config, model checkpoint, and per-epoch
-history together to `output_dir` (default: timestamped under
-`results/runs/`) — see `results/README.md`.
-
-**Compute.** Everything here runs on CPU; no GPU is used or needed —
-basin-level Fortran/Tesseract calls can't batch across a GPU regardless
-of model size, so the bottleneck is elsewhere. Rough cost on a single
-modern CPU core, 35 train + 10 heldout basins over the default 9-year
-window (this project's default `data=camels_snow35`, `split=spatial`),
-150 epochs: ~45 real Fortran/Tesseract calls per basin per epoch
-(finite-difference gradients, see CLAUDE.md's FD cost analysis), ~5s/
-epoch, ~13 minutes total.
-
-The hybrid model's cost scales roughly linearly in basin count (each
-basin's Fortran calls are independent, currently run serially, not
-batched) and in epoch count — e.g. the parked full-CAMELS-671
-comparison (`notes/logs.md`) would be ~15x this project's 45-basin cost
-per epoch on the same hardware, still CPU-only, no algorithmic changes
-needed, just more wall-clock time (or basin-level parallelization,
-not currently implemented).
-
-**Docker note:** this development machine's account can't use Docker (not
-in the `docker` group, no passwordless `sudo`, no `subuid`/`subgid`
-entries for rootless Docker either — see notes/logs.md for the full
-investigation). Day-to-day `apply()`/`vector_jacobian_product()`
-development/testing runs through
-`tesseract_core.Tesseract.from_tesseract_api()`, which imports
-`tesseract_api.py` directly and needs no container — see
-`tests/test_gradients.py`. Actual containerization (`tesseract build`,
-needed for the real submission artifact) runs in CI instead —
-GitHub-hosted runners have Docker preinstalled — see
-[.github/workflows/ci.yml](.github/workflows/ci.yml) and
-[tests/test_tesseract_build.py](tests/test_tesseract_build.py) (a
-smoke test against the actual built images, skipped locally, run in CI
-after each build).
+**Docker note:** day-to-day `apply()`/`vector_jacobian_product()`
+development runs through `tesseract_core.Tesseract.from_tesseract_api()`
+directly (no container needed); actual `tesseract build` runs in CI,
+where Docker is available.
 
 ## Layout
 
 ```
-external/snow17/                 git submodule, pinned commit (Apache-2.0)
-external/sac-sma/                 git submodule, pinned commit (Apache-2.0)
-patches/                          disclosed, minimal, build-time-only patch(es) to vendored source
-fortran/snow17_shim.f90           bind(C) loop around EXSNOW19, state threaded explicitly
-fortran/sacsma_shim.f90           same pattern for EXSAC (SAC-SMA)
-fortran/sacsma_build.sh           stages + patches a build-time copy of sac1.f90, then compiles
-configs/config.yaml                top-level Hydra config for src/train.py (defaults -> hybrid/spatial)
-configs/infer.yaml                 top-level Hydra config for src/infer.py (needs checkpoint=...)
-configs/data/                      which CAMELS derived files to load
-configs/split/spatial.yaml         fixed window, basins partitioned train/heldout (prediction in ungauged basins)
-configs/split/temporal.yaml        same basins, different train/test windows (prediction in ungauged period)
-configs/model/                     architecture hyperparameters, per model
-configs/train/                     epochs/lr/eval frequency, per model
-src/snow17.py                     ctypes wrapper around the snow17 shim (float32)
-src/sacsma.py                     ctypes wrapper around the sacsma shim (float64)
-src/coupling.py                   cross-model gradient orchestration (option 1.5, see CLAUDE.md)
-src/pipeline.py                   wires the real Tesseracts into coupling.py, reused across basins
-src/paramnet.py                   LSTM (12-mo climatology) + static attrs -> 27 bounded parameters
-src/data_module.py                BasinExample + build_split() -- spatial/temporal split logic, shared
-src/model_factory.py              build_model(cfg, ...) -- dispatches on cfg.model.name
-src/train.py                      Hydra CLI: run_training(cfg) for either model, either split
-src/infer.py                      Hydra CLI: load a checkpoint, score it against a (possibly new) split
-data/download_camels.sh           one-time ~3.4GB CAMELS download (not run by make test)
-data/select_basins.py             picks snow-dominated basins by frac_snow, train/heldout split
-data/build_attributes.py          builds the 39-feature normalized static attribute matrix
-data/build_pet.py                 precomputes + caches Hargreaves PET per basin (data/camels/pet/)
-data/build_climatology.py         builds the 12-month climatology sequence per basin (LSTM input)
-data/camels_loader.py             per-basin forcing/streamflow loader + Hargreaves PET (cached)
-tesseracts/snow17/                 Tesseract wrapper: apply() + finite-difference vector_jacobian_product()
-tesseracts/sacsma/                 same, for SAC-SMA
-tests/test_snow17_shim.py          determinism, state continuity, mass balance + reference cross-checks
-tests/test_sacsma_shim.py          same, for the SAC-SMA shim, + a dedicated implicit-SAVE-patch proof
-tests/test_gradients.py            VJP vs. manual perturbation + torch autograd integration, per Tesseract
-tests/test_coupling_toy.py         validates the coupling mechanism against cheap stand-ins first
-tests/test_pipeline_hhwm8.py       real HHWM8 chain: Snow17 -> SAC-SMA -> NSE -> backward, loss decreases
-tests/test_paramnet.py             ParamNet output shapes/dtypes/bounds/gradient-flow
-tests/test_train.py                build_split()/training-loop regression checks (skips w/o CAMELS data)
-notes/NOTES.md                     upstream findings (TPREV, SCF, ADC, bypass_ratio_check, ...) -- writeup material
-notes/logs.md                      rationale log for our own code/design decisions, kept live
-results/                           saved, seeded, reproducible run directories (config+checkpoint+history)
-results/external/                  citable third-party results (e.g. the NeuralHydrology LSTM check) -- no vendored source
+external/snow17/, external/sac-sma/   git submodules, pinned commits (Apache-2.0, unmodified)
+patches/                              disclosed, minimal, build-time-only patch to vendored source
+fortran/                              bind(C) shims threading each model's state explicitly
+tesseracts/snow17/, tesseracts/sacsma/  the two Tesseract containers: apply() + finite-difference VJP
+src/coupling.py                       cross-model gradient orchestration
+src/pipeline.py                       wires the real Tesseracts into coupling.py
+src/paramnet.py                       LSTM + MLP: attributes/climatology -> 27 bounded parameters
+src/train.py, src/infer.py            Hydra-driven training / checkpoint scoring CLIs
+configs/                              Hydra config groups (data/split/model/train)
+data/                                 CAMELS download + basin selection + attribute/PET/climatology prep
+tests/                                shim determinism/mass-balance, VJP checks, coupled-chain regression
+notes/NOTES.md                        upstream Fortran findings, with a before/after proof
+notes/logs.md                         design-decision rationale log
+results/                              saved, seeded, reproducible run directories + external comparisons
 ```
 
 ## License
 
-Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Snow-17 is vendored
-and linked against **unmodified**. SAC-SMA is vendored unmodified as a
-pinned submodule; one disclosed, minimal patch is applied to a **build-time
-copy only** to fix a confirmed upstream defect (see
-[notes/NOTES.md](notes/NOTES.md) and
-[patches/](patches/sac1_bypass_ratio_check_save_fix.patch)) —
-`external/sac-sma` itself is never modified. "Original work" applies to
-this submission, not its dependency tree: the shims, patches, Tesseract
-wrappers, gradient endpoints, and training pipeline are original work
-written during the hackathon period (Aug 3-31, 2026).
+Apache-2.0. See [LICENSE](LICENSE) and [NOTICE](NOTICE). Snow-17 is
+vendored and linked against **unmodified**. SAC-SMA is vendored
+unmodified as a pinned submodule; one disclosed, minimal patch is
+applied to a **build-time copy only** to fix a confirmed upstream
+defect — `external/sac-sma` itself is never modified. "Original work"
+applies to this submission, not its dependency tree: the shims,
+patches, Tesseract wrappers, gradient endpoints, and training pipeline
+are original work written during the hackathon period (Aug 3-31, 2026).
