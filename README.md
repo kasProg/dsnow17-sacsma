@@ -14,7 +14,7 @@ ML + mechanistic models).
 
 ```mermaid
 flowchart LR
-    ATTR["CAMELS attributes<br/>+ climatology"] --> NET["ParamNet<br/>(LSTM + MLP)"]
+    ATTR["CAMELS attributes<br/>+ Monthly climatology"] --> NET["ParamNet<br/>(LSTM + MLP)"]
 
     subgraph TESS["Two composed Tesseracts"]
         direction LR
@@ -40,8 +40,7 @@ own, so θ_A's gradient instead perturbs each Snow-17 parameter and
 reruns both models, reading how the final runoff moved. Snow-17
 produces RAIM (rain-plus-melt) — the same coupling flux NOAA runs
 operationally into SAC-SMA — so the container boundary sits at a real,
-existing operational seam, not one invented for this project.
-
+existing operational seam.
 ## Why Tesseract
 
 PyTorch's `.backward()` walks a recorded graph — Snow-17 and SAC-SMA
@@ -49,8 +48,7 @@ are compiled Fortran, so nothing is recorded and autodiff stops cold.
 Each model is wrapped as its own Tesseract exposing `apply()` and a
 finite-difference `vector_jacobian_product()`; `tesseract-torch` splices
 both into the autograd graph as ordinary differentiable layers. Two
-Tesseracts are composed here, not one merged container, because the
-boundary is real: NOAA maintains Snow-17 and SAC-SMA as separate
+Tesseracts are composed here: NOAA maintains Snow-17 and SAC-SMA as separate
 modules, and a standalone Snow-17 Tesseract is reusable with any
 downstream rainfall-runoff model, not just this one.
 
@@ -90,16 +88,7 @@ trained and tested on the *exact same* 35/10 basin split:
 
 Against a competent LSTM, this hybrid model currently trails on raw
 NSE — see [results/external/neuralhydrology_lstm_pub/](results/external/neuralhydrology_lstm_pub/README.md).
-That's not what this project is arguing: the contribution is
-differentiating through real NOAA-OWP operational Fortran via composed
-Tesseracts, not beating an LSTM's held-out NSE.
 
-Also found and fixed one live upstream bug along the way: a Fortran
-implicit-`SAVE` state-leakage bug in SAC-SMA's `sac1.f90`, with an
-empirical before/after proof — see [notes/NOTES.md](notes/NOTES.md) and
-the disclosed, build-time-only patch in
-[patches/](patches/sac1_bypass_ratio_check_save_fix.patch); the vendored
-submodule itself is never modified.
 
 ## Reproduce
 
