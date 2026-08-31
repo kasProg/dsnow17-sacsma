@@ -33,9 +33,8 @@ reimplementation, not the model actually issuing NOAA's forecasts.
 
 That's the wall this project runs into directly, and it's exactly the
 shape of problem [Tesseract](https://github.com/pasteurlabs/tesseract)
-exists to solve: wrap an existing solver — yours or not, differentiable
-or not — so it becomes a composable layer any training loop can pull
-real gradients through. Not a rewrite. The actual Fortran NOAA runs,
+exists to solve: wrap an existing solver - so it becomes a composable layer any training loop can pull
+real gradients through. The actual Fortran NOAA runs,
 unmodified, with a neural network learning to calibrate it.
 
 ## Architecture
