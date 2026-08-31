@@ -1,16 +1,49 @@
 # 𝛿snow17-sacsma
 
-**Snow-17** and **SAC-SMA** — the NWS's operational snowmelt and
-soil-moisture models, both real, decades-old NOAA-OWP Fortran — wrapped
-as two composed [Tesseract](https://github.com/pasteurlabs/tesseract)
-containers and made end-to-end differentiable. A neural network learns
-both models' parameters directly from basin attributes by
-backpropagating a streamflow loss through the coupled Fortran physics.
+*Built for the Pasteur Labs Tesseract Hackathon 2026 — Track 03: Hybrid
+ML + mechanistic models.*
 
-Built for the Pasteur Labs Tesseract Hackathon 2026, Track 03 (Hybrid
-ML + mechanistic models).
+## The problem
+
+NOAA's River Forecast Centers have run Snow-17 and SAC-SMA in
+production since the 1970s — a snowmelt model and a soil-moisture
+accounting model, hand-calibrated basin by basin by hydrologists, to
+forecast streamflow across the country. That calibration process still
+doesn't scale: NOAA maintains it for a few thousand forecast points,
+and the vast majority of U.S. stream reaches have never been
+individually calibrated at all.
+
+The obvious fix already exists in the literature — train a neural
+network across many basins at once so it learns what calibration *is*,
+instead of hand-tuning one basin at a time, and it generalizes to
+basins nobody calibrated. NeuralHydrology-style LSTMs already do this,
+well. But they throw the physics away to do it: a black-box streamflow
+number, with no melt factor or soil-moisture capacity behind it and no
+conservation of mass to check, isn't something an operational
+forecaster can audit the way they audit SAC-SMA's actual state
+variables.
+
+The differentiable-parameter-learning line of work wants both: keep
+the physical model, let a neural network learn its parameters
+end-to-end the way anything else gets trained by gradient descent. It
+almost always gets there by rewriting the physics in JAX or PyTorch
+first, because autograd needs a recorded graph and compiled Fortran
+leaves none behind — meaning what gets learned describes a
+reimplementation, not the model actually issuing NOAA's forecasts.
+
+That's the wall this project runs into directly, and it's exactly the
+shape of problem [Tesseract](https://github.com/pasteurlabs/tesseract)
+exists to solve: wrap an existing solver — yours or not, differentiable
+or not — so it becomes a composable layer any training loop can pull
+real gradients through. Not a rewrite. The actual Fortran NOAA runs,
+unmodified, with a neural network learning to calibrate it.
 
 ## Architecture
+
+Two composed Tesseract containers wrap Snow-17 and SAC-SMA end to end;
+an LSTM+MLP learns both models' parameters directly from basin
+attributes by backpropagating a streamflow loss through the coupled
+Fortran physics:
 
 ```mermaid
 flowchart LR
@@ -41,6 +74,7 @@ reruns both models, reading how the final runoff moved. Snow-17
 produces RAIM (rain-plus-melt) — the same coupling flux NOAA runs
 operationally into SAC-SMA — so the container boundary sits at a real,
 existing operational seam.
+
 ## Why Tesseract
 
 PyTorch's `.backward()` walks a recorded graph — Snow-17 and SAC-SMA
@@ -88,7 +122,10 @@ trained and tested on the *exact same* 35/10 basin split:
 
 Against a competent LSTM, this hybrid model currently trails on raw
 NSE — see [results/external/neuralhydrology_lstm_pub/](results/external/neuralhydrology_lstm_pub/README.md).
-
+That's not the claim this project is making, though: the point was
+never "beat an LSTM," it was learning NOAA's *actual* operational
+parameters end-to-end without rewriting the physics — see The problem,
+above.
 
 ## Reproduce
 
