@@ -1,17 +1,16 @@
-"""Compare saved training runs' history.json files side by side --
-results/README.md's hybrid-vs-benchmark_lstm comparison, made scriptable
+"""Compare saved training runs' history.json files side by side -- e.g.
+results/README.md's 9-year-vs-3-year-pilot comparison, made scriptable
 instead of hand-copied into a table each time a new run needs checking
 against the existing baselines (see notes/logs.md).
 
 Usage:
     .venv/bin/python results/compare_runs.py \\
-        results/runs/hybrid_spatial_seed0_postvjp \\
-        results/runs/benchmark_lstm_spatial_seed0
+        results/runs/model_10yrs_spatial \\
+        results/runs/hybrid_spatial_seed0
 
-Any number of run directories works, not just two -- e.g. add the
-original results/runs/hybrid_spatial_seed0 as a third argument to see
-the pre-change baseline, the post-change rerun, and the benchmark LSTM
-all in one table/plot.
+Any number of run directories works, not just two -- e.g. add a rerun
+after a code or hyperparameter change as a third argument to see it
+alongside both existing baselines in one table/plot.
 
 Prints a summary table (final train/test NSE, train/test gap, n_epochs,
 avg seconds/epoch) and, if matplotlib is installed, saves an overlaid

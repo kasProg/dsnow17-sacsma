@@ -33,30 +33,28 @@ snow-dominated CAMELS basins with 10 held out. Parameters stay static per
 training rollout regardless of the LSTM -- a hard constraint from this
 project's finite-difference gradient-cost design, see
 [notes/logs.md](notes/logs.md). Real, saved, reproducible result
-(seeded, `results/hybrid_lstm_hargreaves_history.json`): train NSE
-`-0.16 -> +0.66`, held-out NSE `+0.07 -> +0.52` over 25 epochs (PET via
-Hargreaves-Samani, see below) — held-out basins tracked training basins
-closely throughout (train/held-out gap 0.14), no overfitting observed
-at this scale. See [notes/logs.md](notes/logs.md) for the full data
-pipeline (basin selection, PET derivation, training-window coverage
-verification, the MLP-vs-LSTM+Hargreaves comparison) and
-[results/README.md](results/README.md) (`results/runs/hybrid_spatial_seed0/`)
-for these numbers in full.
+(seeded, `results/runs/model_10yrs_spatial/`, WY1991-1999, 9 years):
+median train NSE `+0.38 -> +0.84`, median held-out NSE `+0.28 -> +0.70`
+over 150 epochs (PET via Hargreaves-Samani, see below) — held-out
+basins tracked training basins closely throughout (train/held-out gap
+0.14), no overfitting observed at this scale. See
+[notes/logs.md](notes/logs.md) for the full data pipeline (basin
+selection, PET derivation, training-window coverage verification, the
+MLP-vs-LSTM+Hargreaves comparison) and
+[results/README.md](results/README.md) for these numbers in full.
 
-**Benchmarked against a pure data-driven LSTM** (`src/benchmark_lstm.py`
--- no physical model, streamflow predicted directly from forcing +
-static attributes; same basins/window/loss/forcing as the hybrid model,
-for a controlled comparison, not part of the submission's core
-pipeline). Saved result (`results/runs/benchmark_lstm_spatial_seed0/`): the
-pure LSTM reaches higher training NSE (+0.68 over 150 epochs) but its
-held-out NSE plateaus at +0.34 -- a train/held-out gap of 0.34, against
-the hybrid model's 0.14. This is the actual, quantified case for
-physically-constrained parameter learning over a black box in this
-data-limited (35-basin) regime, not just a citation to someone else's
-result — confirmed under a second, independently-seeded run, not a
-one-off artifact — see [notes/logs.md](notes/logs.md) for the full
-comparison and an honest caveat about what this result does and doesn't
-generalize to.
+**Checked against a properly-engineered LSTM.** A
+[NeuralHydrology](https://github.com/neuralhydrology/neuralhydrology)
+LSTM (256 hidden units, 5 forcing variables, proper minibatched
+training), trained and tested on the *exact same* 35 train / 10 heldout
+basin split as the hybrid model, reaches **median held-out NSE 0.795**
+-- ahead of the hybrid model's 0.70. Said plainly: against a competent
+LSTM, the hybrid model currently trails on this metric, not leads. See
+[`results/external/neuralhydrology_lstm_pub/`](results/external/neuralhydrology_lstm_pub/README.md)
+for that comparison in full. This project's actual contribution
+(differentiating through real NOAA-OWP operational Fortran via composed
+Tesseracts) doesn't depend on beating an LSTM on raw NSE; see "What
+this is" below.
 
 Native-PyTorch HBV is **not** the current plan — it's the documented Aug
 20 fallback only, see CLAUDE.md.
@@ -64,14 +62,13 @@ Native-PyTorch HBV is **not** the current plan — it's the documented Aug
 **Training and inference are now config-driven (Hydra),** not
 hardcoded scripts. `src/train.py`/`src/infer.py` compose a config from
 `configs/` (which data, which model, which train/test split) instead of
-taking constants baked into the code — the same infrastructure now runs
-either model (`model=hybrid` or `model=benchmark_lstm`) and either split
-type: **spatial** (prediction in ungauged basins — this project's
-current 45-basin setup) or **temporal** (prediction in ungauged period
-— same basins, different train/test date windows; a working code path
-as of this refactor, not yet exercised by a saved result, added for a
-planned later full-CAMELS-671 comparison against SOTA differentiable
-hydrology models, see `notes/logs.md`). See
+taking constants baked into the code — the same infrastructure runs
+either split type: **spatial** (prediction in ungauged basins — this
+project's current 45-basin setup) or **temporal** (prediction in
+ungauged period — same basins, different train/test date windows; a
+working code path as of this refactor, not yet exercised by a saved
+result, added for a planned later full-CAMELS-671 comparison against
+SOTA differentiable hydrology models, see `notes/logs.md`). See
 [Reproducing experiments](#reproducing-experiments) below. Regenerating
 both existing results through the new CLI with the same seed reproduced
 the pre-refactor numbers epoch-for-epoch — this was a format/
@@ -157,10 +154,6 @@ checkpoint. Defaults reproduce this repo's saved results exactly:
 # reproduces results/runs/model_10yrs_spatial/ (~13 min, see Compute below)
 .venv/bin/python src/train.py
 
-# Pure-LSTM benchmark (no physical model), same split/basins/loss --
-# reproduces results/runs/lstm_10yrs_spatial/ (~6 min)
-.venv/bin/python src/train.py model=benchmark_lstm train=benchmark_lstm
-
 # Override anything from the CLI, e.g. a different seed or window:
 .venv/bin/python src/train.py seed=1
 .venv/bin/python src/train.py split.window.start=1985-10-01 split.window.end=1988-09-30
@@ -170,7 +163,7 @@ checkpoint. Defaults reproduce this repo's saved results exactly:
 
 # Compare any number of saved runs' train/test NSE side by side + plot
 .venv/bin/python results/compare_runs.py \
-    results/runs/model_10yrs_spatial results/runs/lstm_10yrs_spatial
+    results/runs/model_10yrs_spatial results/runs/hybrid_spatial_seed0
 ```
 
 **Config groups** (`configs/<group>/*.yaml`, composed by `configs/config.yaml`):
@@ -179,8 +172,8 @@ checkpoint. Defaults reproduce this repo's saved results exactly:
 |---|---|---|
 | `data` | `camels_snow35` | which CAMELS derived files to load (basin set, attributes, climatology) |
 | `split` | `spatial`, `temporal` | **spatial**: fixed window, basins partitioned train/heldout (prediction in ungauged basins — this project's current setup). **temporal**: same basins, different train/test date windows (prediction in ungauged period — a working code path, not yet used by a saved result; built for a later full-CAMELS-671 comparison against SOTA differentiable hydrology models, see `notes/logs.md`) |
-| `model` | `hybrid`, `benchmark_lstm` | which architecture to train — the physically-constrained stack, or the pure-LSTM baseline it's benchmarked against |
-| `train` | `hybrid`, `benchmark_lstm` | epochs/lr/eval frequency — paired with the matching `model` (the two have very different per-epoch costs, see Compute below) |
+| `model` | `hybrid` | the physically-constrained Snow17+SAC-SMA+ParamNet stack (kept as a config group -- not collapsed away -- since a second model, e.g. the parked full-CAMELS-671/temporal comparison, would need this same shape again) |
+| `train` | `hybrid` | epochs/lr/eval frequency |
 
 Every run writes its resolved config, model checkpoint, and per-epoch
 history together to `output_dir` (default: timestamped under
@@ -188,15 +181,12 @@ history together to `output_dir` (default: timestamped under
 
 **Compute.** Everything here runs on CPU; no GPU is used or needed —
 basin-level Fortran/Tesseract calls can't batch across a GPU regardless
-of model size, so the bottleneck is elsewhere. Rough costs on a single
+of model size, so the bottleneck is elsewhere. Rough cost on a single
 modern CPU core, 35 train + 10 heldout basins over the default 9-year
 window (this project's default `data=camels_snow35`, `split=spatial`),
-both models run for the same 150 epochs:
-
-| model | cost driver | per-epoch | 150 epochs |
-|---|---|---|---|
-| `hybrid` | ~45 real Fortran/Tesseract calls per basin per epoch (finite-difference gradients, see CLAUDE.md's FD cost analysis) | ~5s | ~13 min |
-| `benchmark_lstm` | ordinary batched backprop, no per-basin Fortran calls | ~2.4s | ~6 min |
+150 epochs: ~45 real Fortran/Tesseract calls per basin per epoch
+(finite-difference gradients, see CLAUDE.md's FD cost analysis), ~5s/
+epoch, ~13 minutes total.
 
 The hybrid model's cost scales roughly linearly in basin count (each
 basin's Fortran calls are independent, currently run serially, not
@@ -242,7 +232,6 @@ src/sacsma.py                     ctypes wrapper around the sacsma shim (float64
 src/coupling.py                   cross-model gradient orchestration (option 1.5, see CLAUDE.md)
 src/pipeline.py                   wires the real Tesseracts into coupling.py, reused across basins
 src/paramnet.py                   LSTM (12-mo climatology) + static attrs -> 27 bounded parameters
-src/benchmark_lstm.py             pure data-driven LSTM model + helpers, for comparison (not core pipeline)
 src/data_module.py                BasinExample + build_split() -- spatial/temporal split logic, shared
 src/model_factory.py              build_model(cfg, ...) -- dispatches on cfg.model.name
 src/train.py                      Hydra CLI: run_training(cfg) for either model, either split
@@ -262,10 +251,10 @@ tests/test_coupling_toy.py         validates the coupling mechanism against chea
 tests/test_pipeline_hhwm8.py       real HHWM8 chain: Snow17 -> SAC-SMA -> NSE -> backward, loss decreases
 tests/test_paramnet.py             ParamNet output shapes/dtypes/bounds/gradient-flow
 tests/test_train.py                build_split()/training-loop regression checks (skips w/o CAMELS data)
-tests/test_benchmark_lstm.py       benchmark LSTM regression check (skips w/o CAMELS data)
 notes/NOTES.md                     upstream findings (TPREV, SCF, ADC, bypass_ratio_check, ...) -- writeup material
 notes/logs.md                      rationale log for our own code/design decisions, kept live
 results/                           saved, seeded, reproducible run directories (config+checkpoint+history)
+results/external/                  citable third-party results (e.g. the NeuralHydrology LSTM check) -- no vendored source
 ```
 
 ## License

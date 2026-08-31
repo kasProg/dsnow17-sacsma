@@ -1,7 +1,0 @@
-# src/benchmark_lstm.py's LSTMBenchmark: pure data-driven baseline, no
-# physical model -- streamflow predicted directly from forcing + static
-# attributes. Not part of the submission's core pipeline; exists to
-# quantify what the physical constraint buys (see results/README.md).
-name: benchmark_lstm
-hidden: 64
-dropout: 0.1

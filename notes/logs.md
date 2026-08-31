@@ -1383,3 +1383,87 @@ from the unrelated theta_B-VJP change -- these two runs are the first to
 carry median-aggregated `history.json`; the 3-year pilot's are still
 mean-aggregated, `compare_runs.py` flags the difference rather than
 silently mixing them).
+
+## External LSTM check: split mismatch found and fixed, honest result kept
+
+Prompted by a question worth asking: NeuralHydrology's commonly-cited
+LSTM benchmarks land around median NSE 0.65-0.75, far above our own
+`benchmark_lstm`'s 0.15 held-out NSE (see the 10-year-window entry
+above). Read `neuralhydrology/training/loss.py`'s `MaskedNSELoss` first,
+suspecting the loss formula (basin-variance-weighted MSE with a fixed,
+precomputed per-basin std) might explain it. It doesn't: worked through
+the math and `masked_nse_loss` (`src/data_module.py`) is nearly
+equivalent to NH's loss for our specific training regime (full-batch,
+fixed window, no minibatch subsequence sampling -- both reduce to a
+per-timestep MSE weighted by 1/variance of that basin's observed flow).
+The one real difference is stabilizer strength (NH's `eps=0.1` on `std`
+vs our `clamp(sum_sq_dev, min=1e-6)`) -- a minor hygiene gap, not
+something that explains a 0.5 NSE difference.
+
+The actual explanation, found by inspecting an existing NH benchmark run
+(`hackathon_bench/daymet_3008_195232/` in the neuralhydrology repo, not
+this one): its `train_basin_file`/`test_basin_file`
+(`examples/snow_basins_{train,test}.txt`) assign basins almost
+**inversely** to `data/camels/selected_basins.csv`'s `train`/`heldout`
+split, despite drawing from the identical 45-basin pool and window. Set
+comparison: 9 of that run's 10 "test" basins are in *our* training set;
+9 of *our* 10 heldout basins were in *its* training set. Only
+`13023000` was held out in both. Its median NSE of ~0.69 (itself a
+median masking a mean of -0.067, one basin scored -6.40 -- the same
+mean-vs-median issue `compare_runs.py` now flags for our own runs) says
+nothing about generalization to *our* heldout basins, because the model
+had already seen 9 of them.
+
+Fixed by editing those two basin-list files in place to exactly match
+`data/camels/selected_basins.csv`'s split (verified with a direct set
+comparison before trusting anything downstream of it -- exactly the
+"what test would prove it doesn't" discipline this project tries to
+hold itself to) and retraining from scratch
+(`hackathon_bench/daymet_3008_224057/`, same config otherwise:
+`commit_hash: e4329c3`, 256 hidden units, 5 forcing variables, 30
+epochs, ~20 min on one GPU). Result, copied into this repo as
+`results/external/neuralhydrology_lstm_pub/` (config + test_metrics.csv
++ a README with the full writeup -- NeuralHydrology is BSD-3-Clause, so
+citing its output is fine; no source code copied): **median held-out
+NSE 0.795**, ahead of the hybrid model's 0.70.
+
+Decision (discussed directly): don't delete `src/benchmark_lstm.py` /
+`results/runs/lstm_10yrs_spatial/` / `results/runs/benchmark_lstm_spatial_seed0/`
+-- keep them as a from-scratch ablation and a marker for future work
+(scaling capacity/forcing/training recipe toward NeuralHydrology's, to
+see whether the hybrid model still wins once the LSTM side is no longer
+a strawman), but stop treating "beats our own weak LSTM" as evidence
+that physical structure beats black-box ML in general. `README.md` and
+`results/README.md` now report both comparisons side by side, plainly:
+the internal ablation (hybrid beats our LSTM, real and unchanged) and
+the external check (a competent LSTM currently beats the hybrid model,
+also real). Neither claim is hidden behind the other. The project's
+actual Tesseract-composition contribution doesn't depend on either
+number -- see CLAUDE.md's judging criteria, none of which require
+beating LSTM SOTA on NSE.
+
+### Reversed: benchmark_lstm removed entirely, not kept
+
+The decision immediately above (keep `src/benchmark_lstm.py` as a
+demoted ablation/future-work marker) was revisited and reversed within
+the same session: removed entirely instead --
+`src/benchmark_lstm.py`, `configs/model/benchmark_lstm.yaml`,
+`configs/train/benchmark_lstm.yaml`, `tests/test_benchmark_lstm.py`,
+and both its saved run directories
+(`results/runs/lstm_10yrs_spatial/`, `results/runs/benchmark_lstm_spatial_seed0/`).
+Reasoning: keeping a model in the repo whose own results section had to
+carry a paragraph explaining why its headline number shouldn't be
+trusted was net-negative for clarity, not net-positive for "future
+work" -- a reader skimming would still see "hybrid beats an LSTM" before
+reaching the caveat. `results/external/neuralhydrology_lstm_pub/` (the
+honest, apples-to-apples comparison against a properly-engineered LSTM)
+stays; it doesn't have this problem since it isn't presented as a claim
+this project gets credit for.
+
+`src/train.py`/`src/infer.py`/`src/model_factory.py` lost the
+`cfg.model.name == "benchmark_lstm"` branches (down to a single
+`"hybrid"` path each); `configs/config.yaml`'s example CLI overrides and
+`.gitignore`'s run-dir allowlist lost their benchmark_lstm entries
+accordingly. `results/compare_runs.py` needed no code changes -- it
+compares arbitrary run directories generically, only its docstring's
+example paths referenced the now-deleted runs.

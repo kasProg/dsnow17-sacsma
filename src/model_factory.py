@@ -1,9 +1,13 @@
-"""Model dispatch by cfg.model.name -- the one place src/train.py and
-src/infer.py decide which nn.Module to build. Keeping this as a small
-separate module (rather than an if/elif inline in train.py) means
-infer.py can build the exact same architecture a checkpoint was trained
-with by reading the same config group, without duplicating the
+"""Model construction from cfg.model -- the one place src/train.py and
+src/infer.py build the net, so infer.py can reconstruct the exact same
+architecture a checkpoint was trained with without duplicating the
 construction logic.
+
+Used to dispatch on cfg.model.name between this hybrid model and a
+pure-LSTM baseline (src/benchmark_lstm.py, removed -- see
+notes/logs.md). Left as a plain function rather than collapsed further,
+since a future second model (e.g. the parked full-CAMELS-671/temporal
+comparison, see notes/logs.md) would need this same shape again.
 """
 
 from __future__ import annotations
@@ -11,36 +15,19 @@ from __future__ import annotations
 import torch.nn as nn
 
 
-def build_model(cfg, n_static: int, n_climate_or_dynamic: int) -> nn.Module:
-    """n_climate_or_dynamic: n_climate_features for "hybrid" (ParamNet's
-    climatology-sequence width, currently 3: prcp/tmean/pet), n_dynamic
-    for "benchmark_lstm" (LSTMBenchmark's per-timestep forcing width,
-    also currently 3 -- see src/benchmark_lstm.py's build_dynamic_array).
-    Same number in this project's current setup, but kept as separate
-    call sites' business, not assumed equal here.
-    """
-    name = cfg.model.name
+def build_model(cfg, n_static: int, n_climate: int) -> nn.Module:
+    """n_climate: ParamNet's climatology-sequence width (currently 3:
+    prcp/tmean/pet, see data/build_climatology.py)."""
+    if cfg.model.name != "hybrid":
+        raise ValueError(f"unknown model.name: {cfg.model.name!r} (expected 'hybrid')")
 
-    if name == "hybrid":
-        from paramnet import ParamNet
+    from paramnet import ParamNet
 
-        return ParamNet(
-            n_static_features=n_static,
-            n_climate_features=n_climate_or_dynamic,
-            lstm_hidden=cfg.model.lstm_hidden,
-            mlp_hidden=cfg.model.mlp_hidden,
-            n_hidden_layers=cfg.model.n_hidden_layers,
-            dropout=cfg.model.dropout,
-        )
-
-    if name == "benchmark_lstm":
-        from benchmark_lstm import LSTMBenchmark
-
-        return LSTMBenchmark(
-            n_dynamic=n_climate_or_dynamic,
-            n_static=n_static,
-            hidden=cfg.model.hidden,
-            dropout=cfg.model.dropout,
-        )
-
-    raise ValueError(f"unknown model.name: {name!r} (expected 'hybrid' or 'benchmark_lstm')")
+    return ParamNet(
+        n_static_features=n_static,
+        n_climate_features=n_climate,
+        lstm_hidden=cfg.model.lstm_hidden,
+        mlp_hidden=cfg.model.mlp_hidden,
+        n_hidden_layers=cfg.model.n_hidden_layers,
+        dropout=cfg.model.dropout,
+    )

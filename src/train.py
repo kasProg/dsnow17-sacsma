@@ -1,14 +1,11 @@
-"""Config-driven training entrypoint (Hydra) for both models this repo
-trains: the hybrid Snow17+SAC-SMA+ParamNet stack (CLAUDE.md's Day 7-10
-milestone, src/paramnet.py) and the pure-LSTM benchmark
-(src/benchmark_lstm.py) used to quantify what the physical constraint
-buys (see results/README.md). One script, one CLI -- `model=` switches
-which one trains, `split=` switches spatial (prediction in ungauged
-basins) vs. temporal (prediction in ungauged period) evaluation. See
-configs/ and the main README's "Reproducing experiments" section.
+"""Config-driven training entrypoint (Hydra) for the hybrid
+Snow17+SAC-SMA+ParamNet stack (CLAUDE.md's Day 7-10 milestone,
+src/paramnet.py). One script, one CLI -- `split=` switches spatial
+(prediction in ungauged basins) vs. temporal (prediction in ungauged
+period) evaluation. See configs/ and the main README's "Reproducing
+experiments" section.
 
-    .venv/bin/python src/train.py                                    # hybrid, spatial (default)
-    .venv/bin/python src/train.py model=benchmark_lstm train=benchmark_lstm
+    .venv/bin/python src/train.py                # spatial split (default)
     .venv/bin/python src/train.py split=temporal seed=1
 
 Kept as a plain function (run_training(cfg)) wrapped by a thin
@@ -16,15 +13,24 @@ Kept as a plain function (run_training(cfg)) wrapped by a thin
 regeneration snippets call run_training() directly with a manually built
 config, no Hydra compose/multirun machinery needed for that path.
 
-One gradient step per epoch, not per basin (hybrid model only -- the
-benchmark model already batches every basin through one LSTM forward
-pass): theta_A/theta_B are computed for all training basins in a single
-batched ParamNet forward pass, then each basin's own (expensive,
-Fortran-backed) CoupledTwoStageFunction call runs individually -- that
-part isn't batchable, SAC-SMA/Snow17 are single-HRU by construction --
-and their losses are averaged into ONE scalar before a single
-.backward()/optimizer.step() call. Standard full-batch gradient descent
-over basins, not per-basin SGD.
+One gradient step per epoch, not per basin: theta_A/theta_B are computed
+for all training basins in a single batched ParamNet forward pass, then
+each basin's own (expensive, Fortran-backed) CoupledTwoStageFunction
+call runs individually -- that part isn't batchable, SAC-SMA/Snow17 are
+single-HRU by construction -- and their losses are averaged into ONE
+scalar before a single .backward()/optimizer.step() call. Standard
+full-batch gradient descent over basins, not per-basin SGD.
+
+A pure data-driven LSTM baseline (src/benchmark_lstm.py) used to live
+alongside this as a second `model=` option, quantifying what the
+physical constraint bought relative to a black-box model trained on the
+same data. Removed: it was a small, from-scratch LSTM that made a weak
+baseline, and keeping it around risked being read as "beats an LSTM" in
+general rather than "beats this particular small LSTM" -- a distinction
+that matters and is easy to lose in a README. See
+results/external/neuralhydrology_lstm_pub/ for the honest version of
+that comparison (a properly-engineered LSTM, on the exact same held-out
+basins) and notes/logs.md for the full removal rationale.
 """
 
 from __future__ import annotations
@@ -43,7 +49,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "data"))
 
-from benchmark_lstm import build_normalized_dynamic_arrays  # noqa: E402
 from data_module import BasinExample, build_split, masked_nse_loss, nse_value  # noqa: E402
 from model_factory import build_model  # noqa: E402
 from pipeline import CoupledNWSStack  # noqa: E402
@@ -93,48 +98,6 @@ def run_epoch_hybrid(
     return nses
 
 
-def run_epoch_benchmark(
-    net,
-    basins: list[BasinExample],
-    X_static: dict,
-    dynamic_arrays: dict,
-    dyn_mean: np.ndarray,
-    dyn_std: np.ndarray,
-    optimizer: torch.optim.Optimizer | None,
-) -> dict[str, float]:
-    x_dynamic = torch.tensor(
-        np.stack([(dynamic_arrays[b.gauge_id] - dyn_mean) / dyn_std for b in basins]),
-        dtype=torch.float64,
-    )
-    x_static = torch.tensor(np.stack([X_static[b.gauge_id] for b in basins]), dtype=torch.float64)
-
-    if optimizer is not None:
-        net.train()
-        q_hat = net(x_dynamic, x_static)
-    else:
-        net.eval()
-        with torch.no_grad():
-            q_hat = net(x_dynamic, x_static)
-
-    losses = []
-    nses = {}
-    for i, ex in enumerate(basins):
-        sim = q_hat[i]
-        loss = masked_nse_loss(sim, ex)
-        losses.append(loss)
-        with torch.no_grad():
-            nses[ex.gauge_id] = float(1.0 - loss.item())
-
-    if optimizer is not None:
-        total_loss = torch.stack(losses).mean()
-        optimizer.zero_grad()
-        total_loss.backward()
-        torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=5.0)
-        optimizer.step()
-
-    return nses
-
-
 def run_training(cfg: DictConfig) -> dict:
     torch.manual_seed(cfg.seed)  # reproducible network init -- see notes/logs.md
 
@@ -147,31 +110,13 @@ def run_training(cfg: DictConfig) -> dict:
     )
 
     n_static = split.X_static[split.train_ids[0]].shape[0]
-    optimizer_lr = cfg.train.lr
+    n_climate = split.X_climate[split.train_ids[0]].shape[1]
+    net = build_model(cfg, n_static, n_climate)
+    stack = CoupledNWSStack()
+    optimizer = torch.optim.Adam(net.parameters(), lr=cfg.train.lr)
 
-    if cfg.model.name == "hybrid":
-        n_climate = split.X_climate[split.train_ids[0]].shape[1]
-        net = build_model(cfg, n_static, n_climate)
-        stack = CoupledNWSStack()
-        optimizer = torch.optim.Adam(net.parameters(), lr=optimizer_lr)
-
-        def run_epoch(basins, opt):
-            return run_epoch_hybrid(net, stack, basins, split.X_static, split.X_climate, opt)
-
-    elif cfg.model.name == "benchmark_lstm":
-        dynamic_arrays, dyn_mean, dyn_std = build_normalized_dynamic_arrays(
-            split.train_examples + split.test_examples, split.train_ids
-        )
-        net = build_model(cfg, n_static, dynamic_arrays[split.train_ids[0]].shape[1])
-        optimizer = torch.optim.Adam(net.parameters(), lr=optimizer_lr)
-
-        def run_epoch(basins, opt):
-            return run_epoch_benchmark(
-                net, basins, split.X_static, dynamic_arrays, dyn_mean, dyn_std, opt
-            )
-
-    else:
-        raise ValueError(f"unknown model.name: {cfg.model.name!r}")
+    def run_epoch(basins, opt):
+        return run_epoch_hybrid(net, stack, basins, split.X_static, split.X_climate, opt)
 
     history = []
     for epoch in range(1, cfg.train.n_epochs + 1):
@@ -180,10 +125,9 @@ def run_training(cfg: DictConfig) -> dict:
         # Median, not mean, for reporting -- standard practice for
         # cross-basin NSE aggregation (a handful of badly-fit basins
         # shouldn't dominate the headline number the way they would
-        # under a mean). The training loss itself (run_epoch_hybrid/
-        # run_epoch_benchmark's torch.stack(losses).mean()) stays a
-        # mean -- that's a distinct, gradient-facing computation, not
-        # this human-facing metric.
+        # under a mean). The training loss itself (run_epoch_hybrid's
+        # torch.stack(losses).mean()) stays a mean -- that's a distinct,
+        # gradient-facing computation, not this human-facing metric.
         median_train_nse = float(np.median(list(train_nses.values())))
         dt = time.time() - t0
 

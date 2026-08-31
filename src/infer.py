@@ -8,10 +8,11 @@ Overriding split/data lets you score a trained model on a NEW window or
 NEW basin set without retraining -- e.g. checking a spatial-split
 checkpoint against a later date range, or (once configs/data/camels_full671.yaml
 exists, see notes/logs.md's "parked for later" entry) basins outside the
-original 45. model= must match what the checkpoint was actually trained
-with -- this script does not store/infer architecture from the
-checkpoint file itself, only from the composed config, since
-state_dict() alone doesn't carry hyperparameters like lstm_hidden.
+original 45. The composed model config must match what the checkpoint
+was actually trained with -- this script does not store/infer
+architecture from the checkpoint file itself, only from the composed
+config, since state_dict() alone doesn't carry hyperparameters like
+lstm_hidden.
 
 Kept as a plain function (run_inference(cfg)) wrapped by a thin
 @hydra.main CLI (cli()), same pattern as src/train.py.
@@ -33,7 +34,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "src"))
 sys.path.insert(0, str(REPO_ROOT / "data"))
 
-from benchmark_lstm import build_normalized_dynamic_arrays  # noqa: E402
 from data_module import build_split, nse_value  # noqa: E402
 from model_factory import build_model  # noqa: E402
 from pipeline import CoupledNWSStack  # noqa: E402
@@ -57,47 +57,22 @@ def run_inference(cfg: DictConfig) -> dict:
     n_static = split.X_static[all_ids[0]].shape[0]
     predictions: dict[str, dict] = {}
 
-    if cfg.model.name == "hybrid":
-        n_climate = split.X_climate[all_ids[0]].shape[1]
-        net = build_model(cfg, n_static, n_climate)
-        net.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
-        net.eval()
-        stack = CoupledNWSStack()
+    n_climate = split.X_climate[all_ids[0]].shape[1]
+    net = build_model(cfg, n_static, n_climate)
+    net.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
+    net.eval()
+    stack = CoupledNWSStack()
 
-        x_static = torch.tensor(np.stack([split.X_static[g] for g in all_ids]), dtype=torch.float64)
-        x_climate = torch.tensor(np.stack([split.X_climate[g] for g in all_ids]), dtype=torch.float64)
-        with torch.no_grad():
-            theta_A, theta_B = net(x_static, x_climate)
-            for i, ex in enumerate(all_examples):
-                sim = stack.run(theta_A[i], theta_B[i], ex.snow17_forcing, ex.sacsma_forcing)
-                predictions[ex.gauge_id] = {
-                    "sim_mm_day": sim.numpy().tolist(),
-                    "nse": nse_value(sim, ex) if ex.valid_mask.any() else None,
-                }
-
-    elif cfg.model.name == "benchmark_lstm":
-        dynamic_arrays, dyn_mean, dyn_std = build_normalized_dynamic_arrays(
-            all_examples, split.train_ids
-        )
-        net = build_model(cfg, n_static, dynamic_arrays[all_ids[0]].shape[1])
-        net.load_state_dict(torch.load(ckpt_path, map_location="cpu"))
-        net.eval()
-
-        x_dynamic = torch.tensor(
-            np.stack([(dynamic_arrays[g] - dyn_mean) / dyn_std for g in all_ids]), dtype=torch.float64
-        )
-        x_static = torch.tensor(np.stack([split.X_static[g] for g in all_ids]), dtype=torch.float64)
-        with torch.no_grad():
-            q_hat = net(x_dynamic, x_static)
-            for i, ex in enumerate(all_examples):
-                sim = q_hat[i]
-                predictions[ex.gauge_id] = {
-                    "sim_mm_day": sim.numpy().tolist(),
-                    "nse": nse_value(sim, ex) if ex.valid_mask.any() else None,
-                }
-
-    else:
-        raise ValueError(f"unknown model.name: {cfg.model.name!r}")
+    x_static = torch.tensor(np.stack([split.X_static[g] for g in all_ids]), dtype=torch.float64)
+    x_climate = torch.tensor(np.stack([split.X_climate[g] for g in all_ids]), dtype=torch.float64)
+    with torch.no_grad():
+        theta_A, theta_B = net(x_static, x_climate)
+        for i, ex in enumerate(all_examples):
+            sim = stack.run(theta_A[i], theta_B[i], ex.snow17_forcing, ex.sacsma_forcing)
+            predictions[ex.gauge_id] = {
+                "sim_mm_day": sim.numpy().tolist(),
+                "nse": nse_value(sim, ex) if ex.valid_mask.any() else None,
+            }
 
     # Median, not mean -- see src/train.py's matching comment; same
     # cross-basin-aggregation reasoning applies here.

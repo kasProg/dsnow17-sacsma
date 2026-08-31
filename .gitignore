@@ -30,12 +30,12 @@ data/camels/*
 # (results/runs/<model>_<split>_<timestamp>/) -- exploratory runs
 # shouldn't accumulate in git. The canonical, reproducible reference
 # runs (results/README.md) are explicitly kept: the primary 9-year
-# comparison, and the earlier 3-year pilot that first showed the effect.
+# result, and the earlier 3-year pilot that first showed the effect.
+# (Both benchmark_lstm run dirs that used to be allowlisted here were
+# removed along with src/benchmark_lstm.py -- see notes/logs.md.)
 results/runs/*
 !results/runs/model_10yrs_spatial/
-!results/runs/lstm_10yrs_spatial/
 !results/runs/hybrid_spatial_seed0/
-!results/runs/benchmark_lstm_spatial_seed0/
 # Hydra's own job-logging artifacts (.hydra/, train.log) -- present when
 # a run went through cli()'s @hydra.main path rather than run_training()
 # called directly; not part of the run's actual content (config.yaml/

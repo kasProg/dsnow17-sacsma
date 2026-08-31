@@ -3,7 +3,6 @@
 # seed=0) -- see results/README.md. Override any group from the CLI,
 # e.g.:
 #
-#   .venv/bin/python src/train.py model=benchmark_lstm train=benchmark_lstm
 #   .venv/bin/python src/train.py split=temporal split.test_window.end=1998-09-30
 #   .venv/bin/python src/train.py seed=1 train.lr=1e-3
 #
