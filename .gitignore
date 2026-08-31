@@ -28,14 +28,13 @@ data/camels/*
 
 # src/train.py's default output_dir is timestamped
 # (results/runs/<model>_<split>_<timestamp>/) -- exploratory runs
-# shouldn't accumulate in git. The canonical, reproducible reference
-# runs (results/README.md) are explicitly kept: the primary 9-year
-# result, and the earlier 3-year pilot that first showed the effect.
-# (Both benchmark_lstm run dirs that used to be allowlisted here were
-# removed along with src/benchmark_lstm.py -- see notes/logs.md.)
+# shouldn't accumulate in git. Exactly one canonical, reproducible
+# reference run is kept (results/README.md). Previously also kept a
+# 3-year pilot run and (earlier still) two benchmark_lstm run dirs --
+# both removed along with the code/results they belonged to; see
+# notes/logs.md.
 results/runs/*
-!results/runs/model_10yrs_spatial/
-!results/runs/hybrid_spatial_seed0/
+!results/runs/model_9yrs_spatial/
 # Hydra's own job-logging artifacts (.hydra/, train.log) -- present when
 # a run went through cli()'s @hydra.main path rather than run_training()
 # called directly; not part of the run's actual content (config.yaml/
@@ -43,6 +42,13 @@ results/runs/*
 results/runs/*/.hydra/
 results/runs/*/train.log
 results/predictions/
+
+# Periodic resume checkpoints (model + optimizer state, every
+# train.checkpoint_every epochs) -- a local training convenience, not a
+# result artifact; committing ~30 of these per canonical run would be
+# pure binary bloat. checkpoint.pt (final) and test_predictions.json
+# stay tracked in the canonical runs above -- only this subdirectory is excluded.
+results/runs/*/checkpoints/
 
 # Hydra's own bookkeeping (config.yaml, overrides.yaml, hydra.yaml,
 # <job>.log) nests inside each run's output_dir (configs/config.yaml's

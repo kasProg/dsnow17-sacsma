@@ -1,16 +1,16 @@
-"""Compare saved training runs' history.json files side by side -- e.g.
-results/README.md's 9-year-vs-3-year-pilot comparison, made scriptable
-instead of hand-copied into a table each time a new run needs checking
-against the existing baselines (see notes/logs.md).
+"""Compare saved training runs' history.json files side by side --
+scriptable instead of hand-copied into a table each time a new run
+needs checking against the canonical one (see notes/logs.md).
 
 Usage:
+    .venv/bin/python src/train.py seed=1 output_dir=results/runs/model_9yrs_spatial_seed1
     .venv/bin/python results/compare_runs.py \\
-        results/runs/model_10yrs_spatial \\
-        results/runs/hybrid_spatial_seed0
+        results/runs/model_9yrs_spatial \\
+        results/runs/model_9yrs_spatial_seed1
 
 Any number of run directories works, not just two -- e.g. add a rerun
 after a code or hyperparameter change as a third argument to see it
-alongside both existing baselines in one table/plot.
+alongside the others in one table/plot.
 
 Prints a summary table (final train/test NSE, train/test gap, n_epochs,
 avg seconds/epoch) and, if matplotlib is installed, saves an overlaid

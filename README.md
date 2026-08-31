@@ -76,8 +76,8 @@ ungauged basins):
 | epoch 150 (final) | **+0.84** | **+0.70** |
 
 Held-out basins track training basins closely throughout (gap ~0.14) —
-no overfitting observed at this scale. Full numbers, an earlier 3-year
-pilot run, and reproduction commands: [results/README.md](results/README.md).
+no overfitting observed at this scale. Full numbers and reproduction
+commands: [results/README.md](results/README.md).
 
 Checked honestly against a properly-engineered LSTM
 ([NeuralHydrology](https://github.com/neuralhydrology/neuralhydrology)),
@@ -121,7 +121,7 @@ data/download_camels.sh
 .venv/bin/python data/build_climatology.py
 
 .venv/bin/python src/train.py                                  # trains the hybrid model (~13 min, CPU)
-.venv/bin/python src/infer.py checkpoint=results/runs/model_10yrs_spatial/checkpoint.pt
+.venv/bin/python src/infer.py checkpoint=results/runs/model_9yrs_spatial/checkpoint.pt
 ```
 
 Training/inference are driven by [Hydra](https://hydra.cc/) configs

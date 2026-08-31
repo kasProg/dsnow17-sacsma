@@ -12,7 +12,7 @@ Small and fast on purpose: 3 train + 2 test basins, 3 epochs, a fixed
 current default) -- this is a smoke test that the training loop runs and
 produces a real gradient signal (loss moves, held-out eval doesn't
 crash), not a reproduction of the full 45-basin run in
-results/runs/model_10yrs_spatial/ (see results/README.md).
+results/runs/model_9yrs_spatial/ (see results/README.md).
 
 Builds a config with OmegaConf.create() directly rather than going
 through Hydra's compose()/initialize() -- avoids that API's global-state

@@ -4,7 +4,7 @@ A properly-configured LSTM (not one we built), trained and tested on
 **our exact 35 train / 10 heldout basin split** (see
 `data/camels/selected_basins.csv`'s `split` column) over **our exact
 WY1991-1999 window** -- an apples-to-apples PUB comparison point for
-`results/runs/model_10yrs_spatial/`, produced with
+`results/runs/model_9yrs_spatial/`, produced with
 [NeuralHydrology](https://github.com/neuralhydrology/neuralhydrology)
 (Kratzert et al., BSD-3-Clause; this directory contains only a results
 CSV and a run config, no source code).
@@ -38,7 +38,7 @@ NSE/KGE/Alpha-NSE/Beta-NSE values.)
 | model | median test NSE |
 |---|---|
 | this NeuralHydrology LSTM | **0.795** |
-| our hybrid Snow17+SAC-SMA model (`runs/model_10yrs_spatial/`) | 0.70 |
+| our hybrid Snow17+SAC-SMA model (`runs/model_9yrs_spatial/`) | 0.70 |
 
 On this held-out set, this LSTM currently outperforms our hybrid model.
 See `results/README.md` for how this fits into the project's results.

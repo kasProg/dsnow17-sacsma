@@ -117,6 +117,11 @@ def run_training(cfg: DictConfig) -> dict:
     def run_epoch(basins, opt):
         return run_epoch_hybrid(net, stack, basins, split.X_static, split.X_climate, opt)
 
+    output_dir = Path(cfg.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    OmegaConf.save(cfg, output_dir / "config.yaml")
+    checkpoints_dir = output_dir / "checkpoints"
+
     history = []
     for epoch in range(1, cfg.train.n_epochs + 1):
         t0 = time.time()
@@ -141,10 +146,55 @@ def run_training(cfg: DictConfig) -> dict:
             + f"  ({dt:.2f}s)"
         )
 
-    output_dir = Path(cfg.output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    OmegaConf.save(cfg, output_dir / "config.yaml")
+        # Resume-capable periodic checkpoint -- model AND optimizer state,
+        # unlike the model-only checkpoint.pt saved below. Every
+        # checkpoint_every epochs, and once more on the final epoch
+        # regardless of N so there's always one reflecting the true end
+        # of training even when n_epochs isn't a multiple of N.
+        if epoch % cfg.train.checkpoint_every == 0 or epoch == cfg.train.n_epochs:
+            checkpoints_dir.mkdir(parents=True, exist_ok=True)
+            torch.save(
+                {
+                    "epoch": epoch,
+                    "model_state_dict": net.state_dict(),
+                    "optimizer_state_dict": optimizer.state_dict(),
+                },
+                checkpoints_dir / f"epoch_{epoch:04d}.pt",
+            )
+
     torch.save(net.state_dict(), output_dir / "checkpoint.pt")
+
+    # Final-epoch predictions on the test (heldout) set -- same shape as
+    # src/infer.py's predictions.json, generated here from the
+    # just-trained net directly rather than reloading the checkpoint.
+    net.eval()
+    x_static_test = torch.tensor(
+        np.stack([split.X_static[g] for g in split.test_ids]), dtype=torch.float64
+    )
+    x_climate_test = torch.tensor(
+        np.stack([split.X_climate[g] for g in split.test_ids]), dtype=torch.float64
+    )
+    predictions: dict[str, dict] = {}
+    with torch.no_grad():
+        theta_A_test, theta_B_test = net(x_static_test, x_climate_test)
+        for i, ex in enumerate(split.test_examples):
+            sim = stack.run(theta_A_test[i], theta_B_test[i], ex.snow17_forcing, ex.sacsma_forcing)
+            predictions[ex.gauge_id] = {
+                "sim_mm_day": sim.numpy().tolist(),
+                "nse": nse_value(sim, ex) if ex.valid_mask.any() else None,
+            }
+    valid_nses = [p["nse"] for p in predictions.values() if p["nse"] is not None]
+    (output_dir / "test_predictions.json").write_text(json.dumps(
+        {
+            "model": cfg.model.name,
+            "split_mode": cfg.split.mode,
+            "epoch": cfg.train.n_epochs,
+            "basin_ids": split.test_ids,
+            "median_nse": float(np.median(valid_nses)) if valid_nses else None,
+            "predictions": predictions,
+        },
+        indent=2,
+    ))
 
     result = {
         "model": cfg.model.name,
@@ -159,7 +209,7 @@ def run_training(cfg: DictConfig) -> dict:
         "history": history,
     }
     (output_dir / "history.json").write_text(json.dumps(result, indent=2))
-    print(f"Saved config + checkpoint + history -> {output_dir}")
+    print(f"Saved config + checkpoint + history + test_predictions -> {output_dir}")
 
     return {"net": net, "output_dir": str(output_dir), **result}
 

@@ -1467,3 +1467,29 @@ this project gets credit for.
 accordingly. `results/compare_runs.py` needed no code changes -- it
 compares arbitrary run directories generically, only its docstring's
 example paths referenced the now-deleted runs.
+
+## Down to one canonical run: model_9yrs_spatial replaces model_10yrs_spatial and the 3-year pilot
+
+`src/train.py` gained periodic resume checkpoints and a final-epoch
+`test_predictions.json` (per-basin simulated streamflow + NSE on the
+test set). Reran the primary training job with that code under a
+corrected name -- `results/runs/model_9yrs_spatial/`, not
+`model_10yrs_spatial/`: the window is 1990-10-01 to 1999-09-30, nine
+water years, not ten; "10yrs" was a round-number mislabel flagged but
+not fixed back when that run dir was first created. Same seed, same
+config otherwise -- numbers match `model_10yrs_spatial/` exactly
+(median train/test NSE 0.84/0.70 at epoch 150, 0.38/0.28 at epoch 1),
+confirming this is a rename-and-refresh, not a different result.
+
+Removed both `results/runs/model_10yrs_spatial/` (superseded exactly
+by the above) and `results/runs/hybrid_spatial_seed0/` (the earlier
+3-year pilot) from the repo -- `git rm`, not a history rewrite, so both
+remain recoverable from earlier commits if ever needed. Decision to
+also drop the pilot (not just the exact duplicate) was a direct choice,
+not a default: one clean canonical result, not history in the repo
+tree, going into the submission's final state. `results/README.md`,
+the main `README.md`, `results/compare_runs.py`'s example usage, and
+`results/external/neuralhydrology_lstm_pub/README.md` all updated to
+point at `model_9yrs_spatial/` -- the numbers cited everywhere were
+already this run's numbers, so no figure changed, only which directory
+name and which files back them.

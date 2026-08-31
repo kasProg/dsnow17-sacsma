@@ -1,5 +1,5 @@
 # Top-level Hydra config for src/train.py. Defaults below reproduce
-# results/runs/model_10yrs_spatial/ exactly (model=hybrid, split=spatial,
+# results/runs/model_9yrs_spatial/ exactly (model=hybrid, split=spatial,
 # seed=0) -- see results/README.md. Override any group from the CLI,
 # e.g.:
 #
