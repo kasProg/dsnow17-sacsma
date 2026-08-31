@@ -7,10 +7,12 @@ separate, ~3.4GB, one-time step, deliberately not run by `make test`.
 Same pattern as tests/test_tesseract_build.py skipping when Docker/the
 built images aren't available.
 
-Small and fast on purpose: 3 train + 2 test basins, 3 epochs -- this is
-a smoke test that the training loop runs and produces a real gradient
-signal (loss moves, held-out eval doesn't crash), not a reproduction of
-the full 45-basin, 25-epoch training run in results/hybrid_lstm_hargreaves_history.json.
+Small and fast on purpose: 3 train + 2 test basins, 3 epochs, a fixed
+3-year window (hardcoded below, independent of configs/split/spatial.yaml's
+current default) -- this is a smoke test that the training loop runs and
+produces a real gradient signal (loss moves, held-out eval doesn't
+crash), not a reproduction of the full 45-basin run in
+results/runs/model_10yrs_spatial/ (see results/README.md).
 
 Builds a config with OmegaConf.create() directly rather than going
 through Hydra's compose()/initialize() -- avoids that API's global-state

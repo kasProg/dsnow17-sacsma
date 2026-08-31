@@ -154,11 +154,11 @@ checkpoint. Defaults reproduce this repo's saved results exactly:
 
 ```bash
 # Hybrid model (Snow17+SAC-SMA+ParamNet), spatial split -- the defaults,
-# reproduces results/runs/hybrid_spatial_seed0/ (~3 min, see Compute below)
+# reproduces results/runs/model_10yrs_spatial/ (~13 min, see Compute below)
 .venv/bin/python src/train.py
 
 # Pure-LSTM benchmark (no physical model), same split/basins/loss --
-# reproduces results/runs/benchmark_lstm_spatial_seed0/ (~2 min)
+# reproduces results/runs/lstm_10yrs_spatial/ (~6 min)
 .venv/bin/python src/train.py model=benchmark_lstm train=benchmark_lstm
 
 # Override anything from the CLI, e.g. a different seed or window:
@@ -166,7 +166,11 @@ checkpoint. Defaults reproduce this repo's saved results exactly:
 .venv/bin/python src/train.py split.window.start=1985-10-01 split.window.end=1988-09-30
 
 # Score a saved checkpoint (no training) -- writes predictions.json
-.venv/bin/python src/infer.py checkpoint=results/runs/hybrid_spatial_seed0/checkpoint.pt
+.venv/bin/python src/infer.py checkpoint=results/runs/model_10yrs_spatial/checkpoint.pt
+
+# Compare any number of saved runs' train/test NSE side by side + plot
+.venv/bin/python results/compare_runs.py \
+    results/runs/model_10yrs_spatial results/runs/lstm_10yrs_spatial
 ```
 
 **Config groups** (`configs/<group>/*.yaml`, composed by `configs/config.yaml`):
@@ -185,13 +189,14 @@ history together to `output_dir` (default: timestamped under
 **Compute.** Everything here runs on CPU; no GPU is used or needed —
 basin-level Fortran/Tesseract calls can't batch across a GPU regardless
 of model size, so the bottleneck is elsewhere. Rough costs on a single
-modern CPU core, 35 train + 10 heldout basins (this project's default
-`data=camels_snow35`, `split=spatial`):
+modern CPU core, 35 train + 10 heldout basins over the default 9-year
+window (this project's default `data=camels_snow35`, `split=spatial`),
+both models run for the same 150 epochs:
 
-| model | cost driver | per-epoch | 25/150 epochs |
+| model | cost driver | per-epoch | 150 epochs |
 |---|---|---|---|
-| `hybrid` | ~45 real Fortran/Tesseract calls per basin per epoch (finite-difference gradients, see CLAUDE.md's FD cost analysis) | ~5-9s | ~25 epochs -> ~3 min |
-| `benchmark_lstm` | ordinary batched backprop, no per-basin Fortran calls | ~0.7s | ~150 epochs -> ~2 min |
+| `hybrid` | ~45 real Fortran/Tesseract calls per basin per epoch (finite-difference gradients, see CLAUDE.md's FD cost analysis) | ~5s | ~13 min |
+| `benchmark_lstm` | ordinary batched backprop, no per-basin Fortran calls | ~2.4s | ~6 min |
 
 The hybrid model's cost scales roughly linearly in basin count (each
 basin's Fortran calls are independent, currently run serially, not

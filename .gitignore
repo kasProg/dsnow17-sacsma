@@ -28,11 +28,20 @@ data/camels/*
 
 # src/train.py's default output_dir is timestamped
 # (results/runs/<model>_<split>_<timestamp>/) -- exploratory runs
-# shouldn't accumulate in git. The two canonical, reproducible reference
-# runs (results/README.md) are explicitly kept.
+# shouldn't accumulate in git. The canonical, reproducible reference
+# runs (results/README.md) are explicitly kept: the primary 9-year
+# comparison, and the earlier 3-year pilot that first showed the effect.
 results/runs/*
+!results/runs/model_10yrs_spatial/
+!results/runs/lstm_10yrs_spatial/
 !results/runs/hybrid_spatial_seed0/
 !results/runs/benchmark_lstm_spatial_seed0/
+# Hydra's own job-logging artifacts (.hydra/, train.log) -- present when
+# a run went through cli()'s @hydra.main path rather than run_training()
+# called directly; not part of the run's actual content (config.yaml/
+# checkpoint.pt/history.json already capture everything reproducible).
+results/runs/*/.hydra/
+results/runs/*/train.log
 results/predictions/
 
 # Hydra's own bookkeeping (config.yaml, overrides.yaml, hydra.yaml,

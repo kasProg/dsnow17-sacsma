@@ -1338,3 +1338,48 @@ invocation. Guarded with `[ -d .venv ] ||` so it's idempotent. Unrelated
 to the Hydra work but found by literally running the README's own
 reproduce instructions while updating them, and directly relevant to
 this task's "anyone can reproduce" goal.
+
+## 10-year window: primary hybrid-vs-benchmark_lstm comparison
+
+`configs/split/spatial.yaml`'s window extended from WY1991-1993 (3
+years) to WY1991-1999 (9 years, `results/runs/model_10yrs_spatial/` and
+`results/runs/lstm_10yrs_spatial/` -- run dirs call it "10yrs" for the
+round number, the exact window is 1990-10-01 to 1999-09-30). Same 45
+selected basins (35 train / 10 heldout), same coverage guarantee
+(<=5% missing streamflow) reconfirmed to hold over the longer range
+before committing to it. `configs/train/hybrid.yaml`'s `n_epochs` moved
+25 -> 150 to match -- the 3-year pilot's 25 epochs was tuned for that
+shorter window's convergence, not a fixed budget; the longer window
+needed more epochs to reach a comparable fit. `configs/train/benchmark_lstm.yaml`
+was already 150 epochs, so this run is the first time both models get
+the *same* epoch budget -- the 3-year pilot gave benchmark_lstm 6x the
+hybrid model's epochs (a deliberate choice at the time, to rule out the
+hybrid model simply being undertrained relative to the benchmark; see
+that entry's own reasoning, still valid, just superseded as the
+project's headline comparison by this cleaner apples-to-apples setup).
+
+Result: a substantially sharper version of the 3-year pilot's finding,
+not a new finding. Train/test gap: hybrid 0.14 (unchanged from the
+3-year pilot, interestingly -- the same relative generalization
+behavior held at 3x the window length) vs. benchmark_lstm 0.63 (up from
+0.34 over 3 years -- more training data let the pure LSTM fit the 35
+training basins tighter without transferring any better to the 10
+heldout ones). The hybrid model now also has final training NSE
++0.84, exceeding the LSTM's +0.78 -- previously (7b61b27) the two
+were within 0.01 of each other, an example used to argue the comparison
+"isn't a strawman" (benchmark not simply undertrained). That argument is
+even stronger here, and no longer close: the hybrid model wins on
+training fit, held-out fit, and generalization gap simultaneously, on
+identical basins/window/loss/epoch-budget.
+
+This is now `results/README.md`'s primary comparison; the original
+3-year pilot (`runs/hybrid_spatial_seed0/`/`runs/benchmark_lstm_spatial_seed0/`)
+is kept, not deleted, as an earlier, independently-seeded data point
+showing the same qualitative effect at a smaller scale. See
+`results/README.md` for the numbers side by side and
+`results/compare_runs.py` for the comparison script (also gained a
+mean-vs-median `agg` column + mismatch warning around this same time,
+from the unrelated theta_B-VJP change -- these two runs are the first to
+carry median-aggregated `history.json`; the 3-year pilot's are still
+mean-aggregated, `compare_runs.py` flags the difference rather than
+silently mixing them).

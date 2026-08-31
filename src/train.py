@@ -177,17 +177,24 @@ def run_training(cfg: DictConfig) -> dict:
     for epoch in range(1, cfg.train.n_epochs + 1):
         t0 = time.time()
         train_nses = run_epoch(split.train_examples, optimizer)
-        mean_train_nse = float(np.mean(list(train_nses.values())))
+        # Median, not mean, for reporting -- standard practice for
+        # cross-basin NSE aggregation (a handful of badly-fit basins
+        # shouldn't dominate the headline number the way they would
+        # under a mean). The training loss itself (run_epoch_hybrid/
+        # run_epoch_benchmark's torch.stack(losses).mean()) stays a
+        # mean -- that's a distinct, gradient-facing computation, not
+        # this human-facing metric.
+        median_train_nse = float(np.median(list(train_nses.values())))
         dt = time.time() - t0
 
-        row = {"epoch": epoch, "mean_train_nse": mean_train_nse, "seconds": dt}
+        row = {"epoch": epoch, "median_train_nse": median_train_nse, "seconds": dt}
         if epoch == 1 or epoch % cfg.train.eval_every == 0 or epoch == cfg.train.n_epochs:
             test_nses = run_epoch(split.test_examples, None)
-            row["mean_test_nse"] = float(np.mean(list(test_nses.values())))
+            row["median_test_nse"] = float(np.median(list(test_nses.values())))
         history.append(row)
         print(
-            f"epoch {epoch:3d}  train_nse={mean_train_nse:+.4f}"
-            + (f"  test_nse={row.get('mean_test_nse'):+.4f}" if "mean_test_nse" in row else "")
+            f"epoch {epoch:3d}  train_nse={median_train_nse:+.4f}"
+            + (f"  test_nse={row.get('median_test_nse'):+.4f}" if "median_test_nse" in row else "")
             + f"  ({dt:.2f}s)"
         )
 

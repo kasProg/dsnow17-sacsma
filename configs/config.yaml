@@ -1,6 +1,7 @@
 # Top-level Hydra config for src/train.py. Defaults below reproduce
-# results/hybrid_lstm_hargreaves_history.json exactly (model=hybrid,
-# split=spatial, seed=0). Override any group from the CLI, e.g.:
+# results/runs/model_10yrs_spatial/ exactly (model=hybrid, split=spatial,
+# seed=0) -- see results/README.md. Override any group from the CLI,
+# e.g.:
 #
 #   .venv/bin/python src/train.py model=benchmark_lstm train=benchmark_lstm
 #   .venv/bin/python src/train.py split=temporal split.test_window.end=1998-09-30

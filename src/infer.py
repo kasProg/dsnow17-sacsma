@@ -99,8 +99,10 @@ def run_inference(cfg: DictConfig) -> dict:
     else:
         raise ValueError(f"unknown model.name: {cfg.model.name!r}")
 
+    # Median, not mean -- see src/train.py's matching comment; same
+    # cross-basin-aggregation reasoning applies here.
     valid_nses = [p["nse"] for p in predictions.values() if p["nse"] is not None]
-    print(f"Mean NSE across {len(valid_nses)} scored basins: {np.mean(valid_nses):+.4f}")
+    print(f"Median NSE across {len(valid_nses)} scored basins: {np.median(valid_nses):+.4f}")
 
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -109,7 +111,7 @@ def run_inference(cfg: DictConfig) -> dict:
         "split_mode": cfg.split.mode,
         "checkpoint": str(ckpt_path),
         "basin_ids": all_ids,
-        "mean_nse": float(np.mean(valid_nses)) if valid_nses else None,
+        "median_nse": float(np.median(valid_nses)) if valid_nses else None,
         "predictions": predictions,
     }
     (output_dir / "predictions.json").write_text(json.dumps(result, indent=2))

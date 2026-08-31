@@ -1,8 +1,11 @@
-# Matches results/hybrid_lstm_hargreaves_history.json -- ~7s/epoch (35
-# train + 10 heldout basins, each basin costs ~45 real Fortran/Tesseract
-# calls per gradient via finite differences, see CLAUDE.md's FD cost
-# analysis), so 25 epochs is ~3 minutes total. See main README's
-# "Compute" section before scaling n_epochs or basin count up a lot.
-n_epochs: 25
+# Matches results/runs/model_10yrs_spatial/ -- ~5s/epoch (35 train + 10
+# heldout basins over the 9-year split=spatial window, each basin costs
+# ~45 real Fortran/Tesseract calls per gradient via finite differences,
+# see CLAUDE.md's FD cost analysis), so 150 epochs is ~13 minutes total.
+# See main README's "Compute" section before scaling n_epochs or basin
+# count up a lot. (Was n_epochs=25 / ~3 min against the earlier 3-year
+# window, results/runs/hybrid_spatial_seed0/ -- kept as a pilot result,
+# see results/README.md.)
+n_epochs: 150
 eval_every: 3
 lr: 3e-3
