@@ -4,8 +4,7 @@
 ! vendored upstream, Apache-2.0, patched at build time -- see
 ! patches/sac1_bypass_ratio_check_save_fix.patch and notes/NOTES.md) that
 ! loops it over a time series for a single HRU with state threaded
-! explicitly. Mirrors snow17_shim.f90's design; see that file and
-! CLAUDE.md for the shared rationale.
+! explicitly. Mirrors snow17_shim.f90's design.
 !
 ! Unlike EXSNOW19, EXSAC's state is 6 individually-named INOUT arguments
 ! (UZTWC, UZFWC, LZTWC, LZFSC, LZFPC, ADIMC), not a packed array -- no

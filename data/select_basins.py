@@ -1,10 +1,10 @@
 """Select snow-dominated CAMELS basins for training/held-out evaluation.
 
-CLAUDE.md's Day 7-10 milestone: "30-50 snow-dominated CAMELS basins,
-held-out basins." "Snow-dominated" is operationalized here as high
-frac_snow (fraction of precipitation falling as snow) from CAMELS'
-own climate-indices attribute file -- the CAMELS authors' own
-climatology summary, not something we're deriving ourselves.
+Target: 30-50 snow-dominated CAMELS basins, with some held out.
+"Snow-dominated" is operationalized here as high frac_snow (fraction of
+precipitation falling as snow) from CAMELS' own climate-indices
+attribute file -- the CAMELS authors' own climatology summary, not
+something we're deriving ourselves.
 
 Run after data/camels/camels_clim.txt, camels_topo.txt, camels_name.txt
 have been downloaded (see notes/logs.md for the download source and
@@ -24,7 +24,7 @@ import pandas as pd
 CAMELS_DIR = Path(__file__).resolve().parent / "camels"
 
 # Top N by frac_snow, split ~80/20 train/held-out. N=45 sits in the
-# middle of CLAUDE.md's "30-50" range. A minimum area filter avoids
+# middle of the 30-50 target range. A minimum area filter avoids
 # tiny/flashy headwater catchments (a handful of CAMELS' highest-frac_snow
 # basins are <5 sq mi) that are more likely to be numerically finicky for
 # reasons unrelated to what we're actually testing (gradient flow through

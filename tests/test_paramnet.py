@@ -87,7 +87,6 @@ def test_gradient_flows_to_every_network_parameter():
     )
     assert all(torch.all(torch.isfinite(p.grad)) for p in params_with_grad)
     assert any(p.grad.abs().sum() > 0 for p in params_with_grad), (
-        "all gradients are exactly zero -- same silent-zero-gradient "
-        "concern flagged elsewhere in this project (CudnnLstmModel, see "
-        "CLAUDE.md)"
+        "all gradients are exactly zero -- silently disconnected from the "
+        "loss despite grad_fn being set"
     )

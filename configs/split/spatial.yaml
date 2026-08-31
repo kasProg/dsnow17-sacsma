@@ -1,8 +1,7 @@
 # Prediction-in-ungauged-basins (PUB): one fixed date window, basins
 # partitioned into train/test by data.selected_basins_csv's own "split"
 # column (train/heldout), written once by data/select_basins.py. This is
-# the split CLAUDE.md's Day 7-10 milestone and every results/ JSON so far
-# use.
+# the split every results/ JSON so far uses.
 #
 # Window starts WY1991 because it's verified (not assumed) full daily
 # coverage and <=5% missing streamflow across all 45 selected basins --

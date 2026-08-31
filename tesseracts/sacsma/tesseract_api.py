@@ -12,8 +12,7 @@ by the hackathon rules) -- adapted for SAC-SMA's specifics below.
 Differentiable inputs: all 16 named scalar SAC-SMA parameters (UZTWM,
 UZFWM, UZK, PCTIM, ADIMP, RIVA, ZPERC, REXP, LZTWM, LZFSM, LZFPM, LZSK,
 LZPK, PFREE, SIDE, RSERV) -- unlike Snow17, there's no extra curve
-parameter to exclude; CLAUDE.md's named list and the actual ex1 parameter
-file agree exactly on 16.
+parameter to exclude; the actual ex1 parameter file lists exactly 16.
 
 Real kind: EXSAC/SAC1 use explicit DOUBLE PRECISION (confirmed by reading
 the source -- see notes/NOTES.md), not Snow17's default 4-byte REAL. This

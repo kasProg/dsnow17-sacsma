@@ -1,8 +1,8 @@
 """Prototype/validation for src/coupling.py's CoupledTwoStageFunction,
 using cheap stand-ins for Snow17/SAC-SMA instead of the real Fortran --
-per CLAUDE.md's "prototype on day 3-4 before committing" for the
-cross-container gradient-coupling design (see notes/NOTES.md for the
-full argument this validates).
+validates the cross-container gradient-coupling design before wiring it
+to the real models (see notes/NOTES.md for the full argument this
+validates).
 
 Three-way check, matching the discipline already used for the individual
 shims (verify a VJP against manual perturbation, don't just trust it):
@@ -39,7 +39,7 @@ from coupling import CoupledTwoStageFunction, FDConfig  # noqa: E402
 # ---------------------------------------------------------------------------
 # Toy stand-ins. Same shape as the real problem on purpose:
 #   - stage A (toy "Snow17"): a temperature-threshold rain/snow partition
-#     (sigmoid-relaxed, mirroring CLAUDE.md's planned PXTEMP relaxation),
+#     (sigmoid-relaxed, mirroring Snow17's planned PXTEMP relaxation),
 #     3 parameters at different scales.
 #   - stage B (toy "SAC-SMA"): a leaky-reservoir recursion with real
 #     memory/lag (state carries across timesteps), 3 parameters including

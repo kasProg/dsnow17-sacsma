@@ -9,8 +9,8 @@ those files' own comments for the full reasoning):
 
   spatial  -- prediction in ungauged basins (PUB). One fixed date
               window; basins partitioned into train/test by
-              data/select_basins.py's own "split" column. This is
-              CLAUDE.md's Day 7-10 setup and every results/ JSON so far.
+              data/select_basins.py's own "split" column. This is the
+              setup behind every results/ JSON so far.
   temporal -- prediction in ungauged period (PUP). The SAME basin set
               for both groups, but a different date window per group --
               the shape needed for the parked full-CAMELS-671/dHBV-period
@@ -31,8 +31,8 @@ from pipeline import SacSmaForcing, Snow17Forcing
 
 # Fixed, not learnable -- Snow17's areal depletion curve. A standard
 # generic curve shape (matches what's used throughout this project's
-# earlier single-basin work), since CLAUDE.md's own plan keeps ADC out
-# of scope for the differentiable parameters (see notes/logs.md).
+# earlier single-basin work); ADC is kept out of scope for the
+# differentiable parameters (see notes/logs.md).
 DEFAULT_ADC = np.array(
     [0.05, 0.09, 0.16, 0.31, 0.54, 0.74, 0.84, 0.89, 0.93, 0.97, 1.0], dtype=np.float64
 )

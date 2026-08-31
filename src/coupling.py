@@ -1,8 +1,8 @@
 """Cross-container gradient coupling for the Snow17 -> SAC-SMA chain.
 
-Implements CLAUDE.md's "option 1.5" as a single custom
-`torch.autograd.Function` rather than two separately-composed Tesseract
-VJPs. See notes/NOTES.md for the full cost argument; short version:
+Implemented as a single custom `torch.autograd.Function` rather than two
+separately-composed Tesseract VJPs. See notes/NOTES.md for the full cost
+argument; short version:
 
 Standard composition (`apply_tesseract(A)` piped into `apply_tesseract(B)`,
 then `.backward()`) asks Tesseract B for `d(runoff)/d(RAIM)` -- a
@@ -12,7 +12,7 @@ dimensionality of what's being differentiated, not the output -- so that
 VJP alone would cost one perturbed SAC-SMA run per RAIM timestep
 (thousands of runs). Intractable.
 
-Option 1.5 avoids ever materializing that object. theta_A's (Snow17's)
+This avoids ever materializing that object. theta_A's (Snow17's)
 gradient is computed by perturbing each Snow17 parameter, running BOTH
 stages, and reading how the resulting *runoff* series moved -- an
 end-to-end VJP that only costs one A+B run pair per parameter. theta_B's

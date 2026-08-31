@@ -3,7 +3,7 @@
 #
 # Deliberately links only external/snow17/src/snow19/*.f (the 13 plain
 # FORTRAN-77 physics files) plus our shim -- not src/share, src/bmi, or
-# src/driver. See CLAUDE.md.
+# src/driver.
 #
 # Do NOT add -fdefault-real-8: EXSNOW19 uses gfortran's default REAL
 # (4 bytes) throughout.

@@ -1,7 +1,7 @@
 """Tests for the snow17 Fortran shim (fortran/snow17_shim.f90).
 
-Three tests CLAUDE.md calls out as required before writing the Tesseract
-wrapper, in order of how much they're trusted:
+Three tests required before writing the Tesseract wrapper, in order of
+how much they're trusted:
 
 1. test_determinism         -- catches COMMON-block leakage between calls
 2. test_state_continuity    -- sharper version of (1); trust this one most

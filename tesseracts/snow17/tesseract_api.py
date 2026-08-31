@@ -5,15 +5,12 @@
 Wraps fortran/snow17_shim.f90 (via src/snow17.py's ctypes binding) as a
 Tesseract: a full-rollout apply() plus a finite-difference
 vector_jacobian_product(), so PyTorch's autograd can cross the Fortran
-boundary via tesseract-torch's apply_tesseract(). See CLAUDE.md for why
-this composition is the point of the project, not incidental to it.
+boundary via tesseract-torch's apply_tesseract().
 
 Differentiable inputs: the 11 named scalar snow17 parameters (SCF, MFMAX,
 MFMIN, UADJ, SI, NMF, TIPM, MBASE, PXTEMP, PLWHC, DAYGM). The 11-point ADC
 (areal depletion curve) is intentionally NOT differentiable in this
-version -- see notes/logs.md for why, and CLAUDE.md's Tesseract-specifics
-section, which scopes the VJP to "the ~13 scalar parameters" (13 was an
-approximate count in that doc; the actual named list is 11).
+version -- see notes/logs.md for why.
 
 VJP method: forward-difference finite differences, one perturbed rollout
 per differentiable input requested plus one shared base rollout. Wrapped
@@ -50,9 +47,9 @@ from snow17 import CS_SIZE, Snow17Params, run_snow17  # noqa: E402
 # Schemas
 #
 
-# The 11 named scalar parameters snow17_shim.f90 exposes as learnable
-# (CLAUDE.md's "Learnable parameters" list, minus ADC -- see module
-# docstring). Order matters only for iteration below, not for correctness.
+# The 11 named scalar parameters snow17_shim.f90 exposes as learnable,
+# minus ADC (see module docstring). Order matters only for iteration
+# below, not for correctness.
 DIFFERENTIABLE_PARAMS = (
     "scf", "mfmax", "mfmin", "uadj", "si",
     "nmf", "tipm", "mbase", "pxtemp", "plwhc", "daygm",
@@ -99,13 +96,13 @@ class InputSchema(BaseModel):
     adc: Array[(11,), Float32]
 
     # Initial carryover state. Cold start is CS=0, TPREV=0 -- EXSNOW19's
-    # own documented convention, see CLAUDE.md's state-contract section.
+    # own documented convention.
     cs0: Array[(CS_SIZE,), Float32]
     tprev0: Float32
 
 
 class OutputSchema(BaseModel):
-    raim: Differentiable[Array[(None,), Float32]]   # mm/day, rain-plus-melt -> feeds SAC-SMA (or HBV, fallback-only per CLAUDE.md)
+    raim: Differentiable[Array[(None,), Float32]]   # mm/day, rain-plus-melt -> feeds SAC-SMA
     sneqv: Differentiable[Array[(None,), Float32]]   # m, SWE
     snowh: Array[(None,), Float32]                   # m, snow depth (diagnostic; not differentiated)
     cs_final: Array[(CS_SIZE,), Float32]

@@ -1,7 +1,7 @@
 """Tests for tesseracts/snow17/tesseract_api.py and
 tesseracts/sacsma/tesseract_api.py.
 
-Two things this file exists to prove, per CLAUDE.md's Day 3-4 milestone:
+Two things this file exists to prove:
 
 1. apply() runs and its outputs match the same-inputs shim call directly
    (tests/test_snow17_shim.py already exhaustively validates the shim itself --
@@ -14,9 +14,8 @@ Two things this file exists to prove, per CLAUDE.md's Day 3-4 milestone:
    caller with no knowledge of the VJP implementation would.
 
 Plus one more thing that isn't optional for this project's actual claim:
-CLAUDE.md's whole thesis is that Tesseract is *load-bearing* -- gradients
-have to actually cross the Fortran boundary via autograd, not just be
-computable if you call vector_jacobian_product by hand.
+gradients have to actually cross the Fortran boundary via autograd, not
+just be computable if you call vector_jacobian_product by hand.
 test_backward_through_apply_tesseract proves that end to end: build a
 torch graph with tesseract_torch.apply_tesseract(), call .backward(),
 and confirm the resulting .grad matches vector_jacobian_product.
@@ -259,9 +258,9 @@ def test_vjp_rejects_adc():
 
 def test_pxtemp_gradient_is_structurally_near_zero(tess):
     """Documents, rather than silently accepts, a known limitation: with
-    the hard TA-vs-PXTEMP threshold (unrelaxed -- see CLAUDE.md's
-    "sigmoid relaxation" note and PACK19.f:104), a small perturbation to
-    PXTEMP flips the rain/snow classification for at most a handful of
+    the hard TA-vs-PXTEMP threshold (unrelaxed -- see PACK19.f:104), a
+    small perturbation to PXTEMP flips the rain/snow classification for
+    at most a handful of
     timesteps whose temperature happens to sit within `eps` of the
     threshold -- so d(loss)/d(PXTEMP) is zero almost everywhere and only
     intermittently nonzero, unlike the other 10 parameters which affect
@@ -298,8 +297,8 @@ def test_backward_through_apply_tesseract(tess, param):
     apply_tesseract() -> loss.backward() -> param.grad, compared against
     vector_jacobian_product() called directly with the same cotangent this
     loss implies (all-ones on both outputs, since loss = sum(raim) +
-    sum(sneqv)). This is the composition CLAUDE.md's whole argument rests
-    on -- Tesseract splicing EXSNOW19 into PyTorch's autograd graph as a
+    sum(sneqv)). This is the composition this project's argument rests on
+    -- Tesseract splicing EXSNOW19 into PyTorch's autograd graph as a
     normal differentiable layer, not just the VJP existing in isolation.
     """
     torch = pytest.importorskip("torch")

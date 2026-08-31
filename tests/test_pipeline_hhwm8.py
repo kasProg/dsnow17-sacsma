@@ -1,7 +1,7 @@
 """Single-basin, direct-parameter-optimization proof: Snow17 -> SAC-SMA ->
 NSE-style loss -> backward(), chained via src/pipeline.py's
 CoupledNWSStack (built on src/coupling.py's CoupledTwoStageFunction).
-CLAUDE.md's Day 5-6 checkpoint: "Loss goes down = submittable."
+The actual milestone check: loss goes down.
 
 No real observed streamflow ships with either vendored ex1 test case --
 checked directly (grep across both test_cases/ trees for obs/flow/
@@ -12,8 +12,8 @@ a synthetic "observed" runoff series, then optimize FROM a perturbed
 initial guess back toward it. This proves gradients flow end-to-end
 through both Fortran models via real autograd and that an optimizer can
 actually use them to reduce a loss -- not a claim about real calibration
-skill against observed streamflow, which needs real CAMELS data
-(CLAUDE.md's Day 7-10 milestone).
+skill against observed streamflow, which needs real CAMELS data (see
+src/train.py).
 """
 
 import sys

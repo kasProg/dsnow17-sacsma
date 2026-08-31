@@ -1,6 +1,5 @@
 """LSTM-encoder + MLP head predicting Snow17 + SAC-SMA parameters from
 basin static attributes AND a monthly climatology sequence.
-CLAUDE.md's Day 7-10 milestone.
 
 Two inputs:
   x_static:  (batch, 39) z-score-normalized CAMELS static attributes
@@ -38,9 +37,9 @@ work, and the architecture patterns here were informed by studying
 NeuralHydrology (Kratzert et al., github.com/neuralhydrology/neuralhydrology,
 BSD-3-Clause) -- NOT MHPI's own dPLHBVrelease/generic_deltamodel/hydrodl2,
 which are PSU Non-Commercial licensed and incompatible with this
-project's Apache-2.0 submission (CLAUDE.md's existing hard constraint;
-their source was deliberately not read while building this file, only
-cited as prior work). No code from either source is copied here; this
+project's Apache-2.0 submission; their source was deliberately not read
+while building this file, only cited as prior work. No code from either
+source is copied here; this
 is an original implementation of a well-documented, published modeling
 pattern.
 """
@@ -55,8 +54,8 @@ from pipeline import SACSMA_PARAMS, SNOW17_PARAMS
 # (low, high) physically valid range for each parameter.
 #
 # Snow17 ranges: informed by the state-contract/units notes in
-# CLAUDE.md and the real calibrated HHWM8 values seen throughout this
-# project (external/snow17/test_cases/ex1/input/params/snow17_params.HHWM8.txt),
+# notes/NOTES.md and the real calibrated HHWM8 values seen throughout
+# this project (external/snow17/test_cases/ex1/input/params/snow17_params.HHWM8.txt),
 # widened to plausible operational bounds rather than tightly bracketing
 # just that one basin.
 #

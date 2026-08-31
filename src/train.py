@@ -1,9 +1,8 @@
 """Config-driven training entrypoint (Hydra) for the hybrid
-Snow17+SAC-SMA+ParamNet stack (CLAUDE.md's Day 7-10 milestone,
-src/paramnet.py). One script, one CLI -- `split=` switches spatial
-(prediction in ungauged basins) vs. temporal (prediction in ungauged
-period) evaluation. See configs/ and the main README's "Reproducing
-experiments" section.
+Snow17+SAC-SMA+ParamNet stack (src/paramnet.py). One script, one CLI --
+`split=` switches spatial (prediction in ungauged basins) vs. temporal
+(prediction in ungauged period) evaluation. See configs/ and the main
+README's "Reproducing experiments" section.
 
     .venv/bin/python src/train.py                # spatial split (default)
     .venv/bin/python src/train.py split=temporal seed=1

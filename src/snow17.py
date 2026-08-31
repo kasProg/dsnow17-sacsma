@@ -2,8 +2,8 @@
 
 Loops EXSNOW19 (NOAA-OWP snow17, vendored under external/snow17/,
 Apache-2.0) over a daily time series for a single HRU, threading the
-19-element carryover state (CS) and TPREV explicitly. See CLAUDE.md for
-the full state contract and unit conventions.
+19-element carryover state (CS) and TPREV explicitly. See notes/NOTES.md
+for the full state contract and unit conventions.
 
 Units: mm/day throughout. Deliberately skips the mm/s <-> mm/step
 conversions the original driver does.
@@ -85,7 +85,7 @@ class Snow17Params:
 
 @dataclass
 class Snow17Output:
-    raim: np.ndarray   # mm/day, rain-plus-melt -> feeds SAC-SMA (or HBV, fallback-only per CLAUDE.md)
+    raim: np.ndarray   # mm/day, rain-plus-melt -> feeds SAC-SMA
     sneqv: np.ndarray  # m, SWE
     snowh: np.ndarray  # m, snow depth
     cs: np.ndarray     # final carryover state, shape (CS_SIZE,)

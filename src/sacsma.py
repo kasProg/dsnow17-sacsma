@@ -4,8 +4,8 @@ Loops EXSAC (NOAA-OWP sac-sma, vendored under external/sac-sma/,
 Apache-2.0, patched at build time -- see
 patches/sac1_bypass_ratio_check_save_fix.patch and notes/NOTES.md) over a
 daily time series for a single HRU, threading the 6-element carryover
-state explicitly. See CLAUDE.md and notes/NOTES.md for the state contract
-and unit conventions. Mirrors src/snow17.py's design.
+state explicitly. See notes/NOTES.md for the state contract and unit
+conventions. Mirrors src/snow17.py's design.
 
 Units: mm/day throughout. Deliberately skips the mm/s <-> mm/step
 conversions the original driver does -- caller must pre-convert rate

@@ -2,8 +2,8 @@
 !
 ! Thin bind(C) wrapper around EXSNOW19 (from external/snow17/src/snow19/,
 ! vendored upstream, Apache-2.0) that loops it over a time series for a
-! single HRU with state threaded explicitly. See CLAUDE.md for the design
-! rationale and the state contract.
+! single HRU with state threaded explicitly. See notes/NOTES.md for the
+! state contract.
 !
 ! Deliberately does NOT link against src/share, src/bmi, or src/driver —
 ! only the 13 plain FORTRAN-77 files in src/snow19/.

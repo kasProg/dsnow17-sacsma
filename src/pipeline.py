@@ -1,11 +1,10 @@
 """Wires the real Snow17 and SAC-SMA Tesseracts into
 src/coupling.py's CoupledTwoStageFunction for a single HRU.
 
-This is the "real" stage_a/stage_b CLAUDE.md's coupling design question
-was resolved in anticipation of -- tests/test_coupling_toy.py validated
-the mechanism against cheap stand-ins first; this module is the drop-in
-swap to the actual Fortran-backed Tesseracts, per notes/logs.md's
-"what's still open going into the real wrapper integration" note.
+This is the real stage_a/stage_b for the coupling design in
+src/coupling.py -- tests/test_coupling_toy.py validated the mechanism
+against cheap stand-ins first; this module is the drop-in swap to the
+actual Fortran-backed Tesseracts.
 """
 
 from __future__ import annotations
